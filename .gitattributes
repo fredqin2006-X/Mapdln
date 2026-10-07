@@ -1,0 +1,13 @@
+* text=auto
+*.ico binary
+*.png binary
+[Aa][Gg][Ee][Nn][Tt][Ss].md export-ignore
+GUI-DESIGN.md export-ignore
+test-output export-ignore
+delivery export-ignore
+.env export-ignore
+.env.* export-ignore
+config.json export-ignore
+**/config.json export-ignore
+cache export-ignore
+requests export-ignore

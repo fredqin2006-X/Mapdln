@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="leaflet.css"><style>
+:root{--card:#ffffff;--ink:#233b34;--field:#f3f6f5;--line:#e1e9e5;--map:#e4ede8;--tint:#e5f5ee}:root.dark{--card:#1d302a;--ink:#e2eeea;--field:#243a32;--line:#334a42;--map:#182b23;--tint:#294d40}
+html,body{margin:0;height:100%;font:13px 'Microsoft YaHei',sans-serif;background:var(--map);color:var(--ink)}#map{height:100%;background:var(--map)}
+#overlay{position:absolute;inset:0;width:100%;height:100%;z-index:500;pointer-events:none}#overlay.active{pointer-events:auto;cursor:crosshair}#outline{fill:#15b89b33;stroke:#07977f;stroke-width:2;pointer-events:visiblePainted;cursor:move}.handle{fill:white;stroke:#07977f;stroke-width:3;pointer-events:all;cursor:grab}.draft{fill:none;stroke:#138d7c;stroke-width:2;stroke-dasharray:6 4}
+#tools{position:absolute;top:18px;left:60px;z-index:600;background:var(--card);border:1px solid var(--line);padding:6px;border-radius:8px;display:flex;gap:4px;max-width:calc(100% - 92px);flex-wrap:wrap}button{border:0;border-radius:5px;padding:8px 10px;background:var(--field);color:var(--ink);cursor:pointer}button:hover{background:var(--tint);color:#07977f}button.on{background:#07977f;color:white}
+#status{position:absolute;bottom:32px;left:18px;z-index:600;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:9px 12px;max-width:75%}#hint{position:absolute;top:72px;left:60px;z-index:600;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px;max-width:75%}#hint:empty{display:none}.leaflet-control-attribution{font-size:10px}.leaflet-div-icon{background:transparent;border:none}.leaflet-bar{box-shadow:none;border:1px solid var(--line);border-radius:6px;overflow:hidden}.leaflet-bar a,.leaflet-bar a:hover{background:var(--card);color:var(--ink);border-color:var(--line)}
+</style></head><body>
+<div id="map"></div><svg id="overlay"><path id="outline"></path><polyline id="draft" class="draft"></polyline><g id="handles"></g></svg>
+<div id="tools"><button data-tool="pan" class="on">移动</button><button data-tool="rectangle">矩形</button><button data-tool="circle">圆形</button><button data-tool="polygon">多边形</button><button data-tool="curve">插值曲线</button><button id="finish">完成</button><button id="clear">清除</button></div>
+<div id="hint"></div><div id="status">准备地图…</div>
+<script src="qwebchannel.js"></script><script src="leaflet.js"></script><script src="map.js"></script></body></html>

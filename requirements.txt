@@ -1,0 +1,10 @@
+PySide6==6.11.2
+rasterio==1.5.2
+pyproj==3.8.0
+shapely==2.1.2
+numpy==2.5.3
+Pillow==12.3.0
+scipy==1.18.1
+requests==2.34.2
+mercantile==1.2.1
+PySocks==1.7.1
