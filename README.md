@@ -1,10 +1,14 @@
 # Mapdln 2.1 · 可视化地图下载器
 
-Windows 桌面地图下载器。**双击 `mapdln.exe` 直接进入 GUI，无需安装 Python、Qt 或 GDAL。** 本工具在 [NingsingM/mapdln](https://github.com/NingsingM/mapdln) 的卫星与地形下载功能基础上增加图形界面，并统一 GUI / CLI 下载引擎。
+致谢：@nings在群里提供的Python源码，此程序基于核心Python源码开发
+
+本程序开发目的为了适配ALIGNMENT : An Engineering Odyssey Demo中的“自由创造”板块开发，方便玩家下载高程与地形图
+
+**双击 `mapdln.exe` 直接进入 GUI，无需安装 Python、Qt 或 GDAL。** 本工具在 [NingsingM/mapdln](https://github.com/NingsingM/mapdln) 的卫星与地形下载功能基础上增加图形界面，并统一 GUI / CLI 下载引擎。
 
 [下载 Windows 2.1.0](https://github.com/fredqin2006-X/Mapdln/releases/tag/v2.1.0) · [开源仓库](https://github.com/fredqin2006-X/Mapdln) · [发行说明](RELEASE-NOTES.md)
 
-建议下载 `Mapdln-2.1.0-Windows-x64.zip`，内含程序、使用说明与第三方许可；也提供单文件 `mapdln.exe`、源码 ZIP 和 SHA-256 校验。开源仓库及发行包均不携带开发者账户配置，首次使用请填写自己的凭据。
+建议下载 `Mapdln-2.1.0-Windows-x64.zip`，内含程序、使用说明与第三方许可；也提供源码 ZIP 和 SHA-256 校验。开源仓库及发行包均不携带开发者账户配置，首次使用请填写自己的凭据。
 
 ## 使用
 
