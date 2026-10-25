@@ -1,10 +1,10 @@
-# Mapdln 2.2 · 可视化地图下载器
+# Mapdln 2.3 · 可视化地图下载器
 
 Windows 桌面地图下载器。**双击 `mapdln.exe` 直接进入 GUI，无需安装 Python、Qt 或 GDAL。** 本工具在 [NingsingM/mapdln](https://github.com/NingsingM/mapdln) 的卫星与地形下载功能基础上增加图形界面，并统一 GUI / CLI 下载引擎。
 
 [已发布的 Windows 2.1.0](https://github.com/fredqin2006-X/Mapdln/releases/tag/v2.1.0) · [开源仓库](https://github.com/fredqin2006-X/Mapdln) · [发行说明](RELEASE-NOTES.md)
 
-当前源码和本地构建版本为 **2.2.0**，尚未发布到 GitHub。Windows 交付使用整个 `Mapdln-2.2.0-Windows-x64.zip`，内含程序、使用说明与第三方许可。开源仓库及发行包均不携带开发者账户配置，首次使用请填写自己的凭据。
+当前源码和本地构建版本为 **2.3.0**，尚未发布到 GitHub。Windows 交付使用整个 `Mapdln-2.3.0-Windows-x64.zip`，内含程序、使用说明与第三方许可。开源仓库及发行包均不携带开发者账户配置，首次使用请填写自己的凭据。
 
 ## 使用
 
@@ -75,7 +75,7 @@ python -m venv .venv
 powershell -ExecutionPolicy Bypass -File tools\build.ps1
 ```
 
-构建为单文件窗口程序，含 Qt WebEngine、Rasterio 的 GDAL、PROJ 和本机地图页面。`tools/mapdln.spec` 固定排除构建主机 PATH 中可能存在的 Poppler ICU 冲突库，让 Qt 使用 Windows 系统 ICU 接口；不要改用未过滤依赖的临时打包命令。EXE 与交付 ZIP 作为构建成果独立保存，Git 提交保存可重现源码。源码仍保持 MIT 协议，第三方组件及地图数据遵循各自许可（见 `THIRD-PARTY.md`）。
+构建为单文件窗口程序，含 Qt WebEngine、Rasterio 的 GDAL、PROJ 和本机地图页面。`tools/mapdln.spec` 是唯一打包规则，根目录 `Mapdln.spec` 仅兼容转发；它过滤 Poppler ICU 冲突库与未用 Qt 资源。构建脚本验证成品版本、包内资源及独立目录后台导出后，备份旧根目录 EXE，自动将 `dist/mapdln.exe` 同步到根目录，并核对哈希。2.3.0 本机实测为 175.74 MiB，比原根目录文件减少 40.2%，详情见 [体积记录](OPTIMIZATION.md)。EXE 与交付 ZIP 作为构建成果独立保存，Git 提交保存可重现源码。源码仍保持 MIT 协议，第三方组件及地图数据遵循各自许可（见 `THIRD-PARTY.md`）。
 
 源码入口、键鼠操作、下载锁定、回归验证、构建打包、Git 回档和故障排查见 [维护文档](MAINTENANCE.md)。
 

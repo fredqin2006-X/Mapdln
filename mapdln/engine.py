@@ -20,7 +20,6 @@ from rasterio.transform import from_bounds
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window, transform as window_transform
 import mercantile
-from scipy.ndimage import gaussian_filter
 from shapely.geometry import mapping
 from .config import home, Ledger, atomic_json, redact
 from .geometry import make_grid, tiles_for, boundary_json
@@ -362,6 +361,35 @@ def terrain_sources(grid,options,control):
             remote.close()
 
 
+def gaussian_kernel(sigma):
+    """Match the previous Gaussian's truncate=4 radius without SciPy."""
+    if sigma == 0:
+        return np.ones(1)
+    radius = int(sigma * 4 + .5)
+    x = np.arange(-radius, radius + 1)
+    kernel_1d = np.exp(-x**2 / (2 * sigma**2))
+    kernel_1d /= kernel_1d.sum()
+    return kernel_1d
+
+def convolve_2d(data, kernel):
+    """2D 可分离卷积（纯 numpy，无 scipy 依赖）"""
+    # 行方向卷积
+    pad = len(kernel) // 2
+    # NumPy's symmetric padding matches SciPy's default half-sample reflect.
+    padded = np.pad(data, ((0, 0), (pad, pad)), mode='symmetric')
+    result = np.zeros_like(data)
+    for i, k in enumerate(kernel):
+        result += padded[:, i:i+data.shape[1]] * k
+
+    # 列方向卷积
+    padded = np.pad(result, ((pad, pad), (0, 0)), mode='symmetric')
+    final = np.zeros_like(data)
+    for i, k in enumerate(kernel):
+        final += padded[i:i+data.shape[0], :] * k
+
+    return final
+
+
 def elevation_export(grid,files,out,temp,options,control):
     from contextlib import ExitStack
     nodata=-9999.
@@ -395,8 +423,10 @@ def elevation_export(grid,files,out,temp,options,control):
             a=src.read(1,window=Window(x0,y0,x1-x0,y1-y0))
             valid=a!=nodata
             if sigma:
-                weights=gaussian_filter(valid.astype("float32"),sigma)
-                a=gaussian_filter(np.where(valid,a,0),sigma)/np.maximum(weights,1e-12)
+                # 使用纯 numpy 高斯卷积（无 scipy 依赖）
+                kernel = gaussian_kernel(sigma)
+                weights = convolve_2d(valid.astype("float32"), kernel)
+                a = convolve_2d(np.where(valid, a, 0), kernel) / np.maximum(weights, 1e-12)
             a[~valid]=nodata
             r=int(win.row_off)-y0; c=int(win.col_off)-x0
             a=a[r:r+int(win.height),c:c+int(win.width)]

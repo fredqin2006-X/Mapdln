@@ -18,6 +18,7 @@ dist/
 *.mainfest
 *.spec
 !tools/mapdln.spec
+!Mapdln.spec
 
 #IDE
 .idea/
@@ -42,6 +43,7 @@ delivery/
 .pytest_cache/
 *.part
 build-log*.txt
+/build*.log
 /mapdln.exe
 
 # Per-user configuration and generated downloads

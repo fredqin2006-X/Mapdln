@@ -6,7 +6,7 @@ Mapdln application code retains the original MIT license in LICENSE.
 - Qt WebEngine uses Chromium: https://doc.qt.io/qt-6/qtwebengine-licensing.html
 - Leaflet 1.9.4: BSD-2-Clause, bundled license `mapdln/web/LEAFLET-LICENSE.txt`.
 - Rasterio / GDAL, PROJ / pyproj, Shapely / GEOS: https://github.com/rasterio/rasterio , https://gdal.org/ , https://proj.org/ , https://github.com/pyproj4/pyproj , https://github.com/shapely/shapely . Licenses are provided by each upstream project and wheel metadata.
-- NumPy, SciPy, Pillow, Requests, mercantile, PySocks, PyInstaller: see installed dependency metadata and upstream distributions for their respective license texts. PyInstaller bootloader redistribution follows its license exception.
+- NumPy, Pillow, Requests, mercantile, PySocks, PyInstaller: see installed dependency metadata and upstream distributions for their respective license texts. PyInstaller bootloader redistribution follows its license exception. SciPy is no longer a runtime dependency in 2.3.0; NumPy still requires its bundled OpenBLAS DLL, whose filename may contain `libscipy_openblas`.
 
 Online map services are not redistributed as application source. Mapbox imagery remains © Mapbox / Maxar / respective providers; OpenStreetMap attribution is displayed where used. AMap (高德) and Baidu (百度) maps retain SDK attribution and require suitable developer API authorization.
 

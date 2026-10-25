@@ -169,7 +169,7 @@ GUIDES={
 
 class Window(QMainWindow):
     def __init__(self):
-        super().__init__();QApplication.setStyle("Fusion");QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy));self.setWindowTitle("Mapdln · 可视化地图下载器 "+__version__);self.resize(1440,900);self.setMinimumSize(1080,740)
+        super().__init__();QApplication.setStyle("Fusion");QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy));self.setWindowTitle("Mapdln · 地图下载器 "+__version__);self.resize(1520,920);self.setMinimumSize(1200,780)
         self.setWindowIcon(QIcon(str(resource('assets/app.ico'))))
         self.settings={};self.config_error=""
         try:self.settings=load()
@@ -179,10 +179,20 @@ class Window(QMainWindow):
         self.jobs=Jobs(self)
         assets=resource("web")
         self.server=PreviewServer(assets,lambda:dict(self.settings))
-        central=QWidget();self.setCentralWidget(central);layout=QVBoxLayout(central);layout.setContentsMargins(24,18,24,18);layout.setSpacing(14)
-        header=QHBoxLayout();mark=QLabel();mark.setPixmap(QPixmap(str(resource('assets/app.png'))).scaled(40,40,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation));header.addWidget(mark);title=QVBoxLayout();title.setSpacing(2);name=label("Mapdln",False);name.setObjectName("brand");title.addWidget(name);subtitle=label("选一片区域，把影像与地形带回本地",False);subtitle.setProperty("muted",True);title.addWidget(subtitle);header.addLayout(title);header.addStretch()
-        self.work_nav=button("下载工作台",lambda:self.navigate(0));self.account_nav=button("账户配置",lambda:self.navigate(1));header.addWidget(self.work_nav);header.addWidget(self.account_nav)
-        self.health=label("尚未配置下载凭据",False);self.health.setProperty("muted",True);header.addWidget(self.health);layout.addLayout(header)
+        central=QWidget();self.setCentralWidget(central);layout=QVBoxLayout(central);layout.setContentsMargins(28,24,28,24);layout.setSpacing(18)
+        # 现代化顶栏：品牌 + 导航 + 状态
+        header=QHBoxLayout();header.setSpacing(16)
+        mark=QLabel();mark.setPixmap(QPixmap(str(resource('assets/app.png'))).scaled(48,48,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation));header.addWidget(mark)
+        title=QVBoxLayout();title.setSpacing(4)
+        name=label("Mapdln",False);name.setObjectName("brand");title.addWidget(name)
+        subtitle=label("高精度卫星地图与地形数据采集工具",False);subtitle.setProperty("muted",True);title.addWidget(subtitle)
+        header.addLayout(title);header.addStretch()
+        # 导航按钮组
+        nav_group=QHBoxLayout();nav_group.setSpacing(8)
+        self.work_nav=button("🗺️ 下载工作台",lambda:self.navigate(0));self.account_nav=button("⚙️ 账户配置",lambda:self.navigate(1))
+        nav_group.addWidget(self.work_nav);nav_group.addWidget(self.account_nav)
+        header.addLayout(nav_group)
+        self.health=label("● 未配置下载凭据",False);self.health.setProperty("muted",True);header.addWidget(self.health);layout.addLayout(header)
         self.pages=QStackedWidget();layout.addWidget(self.pages,1);self.build_workbench();self.build_accounts()
         self.debounce=QTimer(self);self.debounce.setSingleShot(True);self.debounce.setInterval(350);self.debounce.timeout.connect(self.calculate)
         self.ledger_timer=QTimer(self);self.ledger_timer.timeout.connect(self.refresh_quota);self.ledger_timer.start(15000)
@@ -193,41 +203,235 @@ class Window(QMainWindow):
     def apply_theme(self):
         dark=QApplication.styleHints().colorScheme()==Qt.ColorScheme.Dark
         self.theme_dark=dark
-        bg,card,ink,muted,line,field,tint=("#14221f","#1d302a","#e2eeea","#a2bab2","#334a42","#243a32","#294d40") if dark else ("#f3f6f5","#ffffff","#233b34","#647b75","#e1e9e5","#f6f9f7","#e5f5ee")
+        # 现代化深色梯度配色：从深邃到浮起的五层表面
+        bg,surface1,surface2,ink,muted,line,accent,accent_hover=("#0A0D12","#0F131C","#161D2B","#E8EDF3","#9AA5B8","#1E2636","#38BDF8","#22A8E8") if dark else ("#F8FAFB","#FFFFFF","#F3F6F8","#1A2332","#6B7785","#DFE4EA","#38BDF8","#22A8E8")
         arrow=resource('assets/chevron-dark.svg' if dark else 'assets/chevron-light.svg').as_posix()
         palette=QPalette()
-        for role,color in ((QPalette.ColorRole.Window,bg),(QPalette.ColorRole.WindowText,ink),(QPalette.ColorRole.Base,field),(QPalette.ColorRole.Text,ink),(QPalette.ColorRole.Button,field),(QPalette.ColorRole.ButtonText,ink),(QPalette.ColorRole.Highlight,'#07977f'),(QPalette.ColorRole.HighlightedText,'#ffffff')):palette.setColor(role,QColor(color))
+        for role,color in ((QPalette.ColorRole.Window,bg),(QPalette.ColorRole.WindowText,ink),(QPalette.ColorRole.Base,surface1),(QPalette.ColorRole.Text,ink),(QPalette.ColorRole.Button,surface1),(QPalette.ColorRole.ButtonText,ink),(QPalette.ColorRole.Highlight,accent),(QPalette.ColorRole.HighlightedText,'#FFFFFF')):palette.setColor(role,QColor(color))
         for role in (QPalette.ColorRole.Text,QPalette.ColorRole.ButtonText):palette.setColor(QPalette.ColorGroup.Disabled,role,QColor(muted))
         QApplication.setPalette(palette)
         self.setStyleSheet(f"""
-        QMainWindow{{background:{bg};}}QWidget{{color:{ink};font-family:'Microsoft YaHei';font-size:13px;}}
-        QLabel,QCheckBox{{background:transparent;}}
-        QLabel[muted="true"]{{color:{muted};font-size:12px;}}
-        QLabel#brand{{font-size:23px;font-weight:700;color:#07977f;}}
-        QGroupBox{{background:{card};border:1px solid {line};border-radius:10px;margin-top:12px;padding:17px 10px 10px;}}
-        QGroupBox::title{{subcontrol-origin:margin;left:14px;padding:0 5px;font-weight:600;}}
-        QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QPlainTextEdit{{background:{field};border:1px solid transparent;border-radius:6px;padding:8px 9px;selection-background-color:#07977f;selection-color:white;}}
-        QLineEdit:focus,QComboBox:focus,QSpinBox:focus,QDoubleSpinBox:focus,QPlainTextEdit:focus{{border:1px solid #07977f;}}
-        QComboBox{{padding-right:30px;}}
-        QComboBox:hover{{border:1px solid {line};}}
-        QComboBox::drop-down{{subcontrol-origin:padding;subcontrol-position:top right;width:28px;border:0;background:transparent;}}
-        QComboBox::down-arrow{{image:url("{arrow}");width:16px;height:16px;}}
-        QComboBox QAbstractItemView{{background:{card};border:1px solid {line};border-radius:6px;padding:5px;outline:0;selection-background-color:{tint};selection-color:#07977f;}}
-        QComboBox QAbstractItemView::item{{min-height:30px;padding:4px 10px;border:0;}}
-        QComboBox QAbstractItemView::item:selected,QComboBox QAbstractItemView::item:hover{{background:{tint};color:#07977f;border-radius:5px;}}
-        QFrame#comboPopup{{border:0;background:{card};}}
-        QSpinBox:disabled,QDoubleSpinBox:disabled{{color:{muted};}}
-        QPushButton{{background:{field};border:1px solid transparent;border-radius:6px;padding:8px 10px;}}
-        QPushButton:hover,QPushButton:checked{{background:{tint};color:#07977f;}}QPushButton:pressed{{background:{line};}}QPushButton:disabled{{color:{muted};}}
-        QPushButton[primary="true"]{{background:#07977f;color:white;font-weight:600;}}QPushButton[primary="true"]:hover{{background:#07836e;color:white;}}QPushButton[primary="true"]:disabled{{background:{line};color:{muted};}}
-        QProgressBar{{border:0;border-radius:4px;background:{line};text-align:center;min-height:16px;font-size:11px;}}QProgressBar::chunk{{background:#07977f;border-radius:4px;}}
-        QScrollArea{{border:0;background:transparent;}}QCheckBox{{spacing:6px;}}
-        QCheckBox::indicator{{width:14px;height:14px;border:1px solid {line};border-radius:3px;background:{field};}}
-        QCheckBox::indicator:checked{{background:#07977f;border-color:#07977f;}}
-        QScrollBar:vertical{{border:0;background:transparent;width:6px;margin:0;}}QScrollBar::handle:vertical{{background:{line};border-radius:3px;min-height:28px;}}
-        QScrollBar:horizontal{{border:0;background:transparent;height:6px;margin:0;}}QScrollBar::handle:horizontal{{background:{line};border-radius:3px;min-width:28px;}}
-        QScrollBar::add-line,QScrollBar::sub-line{{border:0;width:0;height:0;}}QScrollBar::add-page,QScrollBar::sub-page{{background:transparent;}}
-        QSplitter::handle{{background:transparent;width:2px;}}
+        * {{
+            font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }}
+        QMainWindow {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg}, stop:1 {surface1});
+        }}
+        QWidget {{
+            color: {ink};
+            font-size: 13px;
+            font-weight: 400;
+        }}
+        QLabel, QCheckBox {{
+            background: transparent;
+        }}
+        QLabel[muted="true"] {{
+            color: {muted};
+            font-size: 12px;
+            font-weight: 400;
+            line-height: 1.5;
+        }}
+        QLabel#brand {{
+            font-size: 24px;
+            font-weight: 600;
+            color: {accent};
+            letter-spacing: -0.3px;
+        }}
+        QGroupBox {{
+            background: {surface2};
+            border: 1px solid {line};
+            border-radius: 16px;
+            margin-top: 14px;
+            padding: 20px 16px 16px;
+            font-weight: 400;
+            font-size: 13px;
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 18px;
+            padding: 0 6px;
+            color: {ink};
+            font-size: 13px;
+            font-weight: 500;
+        }}
+        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {{
+            background: {surface1};
+            border: 1px solid {line};
+            border-radius: 8px;
+            padding: 10px 12px;
+            selection-background-color: {accent};
+            selection-color: white;
+            font-size: 13px;
+        }}
+        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {{
+            border: 2px solid {accent};
+            padding: 9px 11px;
+        }}
+        QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {{
+            border-color: {accent};
+        }}
+        QComboBox {{
+            padding-right: 32px;
+        }}
+        QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: center right;
+            width: 32px;
+            border: 0;
+            background: transparent;
+        }}
+        QComboBox::down-arrow {{
+            image: url("{arrow}");
+            width: 18px;
+            height: 18px;
+        }}
+        QComboBox QAbstractItemView {{
+            background: {surface2};
+            border: 1px solid {line};
+            border-radius: 12px;
+            padding: 8px;
+            outline: 0;
+            selection-background-color: {accent};
+            selection-color: white;
+        }}
+        QComboBox QAbstractItemView::item {{
+            min-height: 36px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            margin: 2px 0;
+        }}
+        QComboBox QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:hover {{
+            background: {accent};
+            color: white;
+        }}
+        QFrame#comboPopup {{
+            border: 0;
+            background: {surface2};
+        }}
+        QSpinBox:disabled, QDoubleSpinBox:disabled {{
+            color: {muted};
+            border-color: {line};
+        }}
+        QPushButton {{
+            background: {surface1};
+            border: 1px solid {line};
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-weight: 400;
+            font-size: 13px;
+        }}
+        QPushButton:hover {{
+            background: {surface2};
+            border-color: {accent};
+            color: {accent};
+        }}
+        QPushButton:checked {{
+            background: {accent};
+            border-color: {accent};
+            color: white;
+        }}
+        QPushButton:pressed {{
+            background: {line};
+            transform: scale(0.98);
+        }}
+        QPushButton:disabled {{
+            color: {muted};
+            border-color: {line};
+            background: {surface1};
+        }}
+        QPushButton[primary="true"] {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {accent}, stop:1 {accent_hover});
+            color: white;
+            border: 1px solid {accent};
+            font-weight: 500;
+            padding: 11px 20px;
+        }}
+        QPushButton[primary="true"]:hover {{
+            background: {accent_hover};
+            border-color: {accent_hover};
+        }}
+        QPushButton[primary="true"]:disabled {{
+            background: {line};
+            color: {muted};
+            border-color: {line};
+        }}
+        QProgressBar {{
+            border: 0;
+            border-radius: 999px;
+            background: {line};
+            text-align: center;
+            min-height: 20px;
+            max-height: 20px;
+            font-size: 11px;
+            font-weight: 500;
+            color: {ink};
+        }}
+        QProgressBar::chunk {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent}, stop:1 {accent_hover});
+            border-radius: 999px;
+        }}
+        QScrollArea {{
+            border: 0;
+            background: transparent;
+        }}
+        QCheckBox {{
+            spacing: 8px;
+        }}
+        QCheckBox::indicator {{
+            width: 18px;
+            height: 18px;
+            border: 2px solid {line};
+            border-radius: 5px;
+            background: {surface1};
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: {accent};
+        }}
+        QCheckBox::indicator:checked {{
+            background: {accent};
+            border-color: {accent};
+            image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTAiIHZpZXdCb3g9IjAgMCAxMiAxMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEgNUw0LjUgOC41TDExIDEiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPgo=);
+        }}
+        QScrollBar:vertical {{
+            border: 0;
+            background: transparent;
+            width: 8px;
+            margin: 0;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {line};
+            border-radius: 4px;
+            min-height: 32px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {muted};
+        }}
+        QScrollBar:horizontal {{
+            border: 0;
+            background: transparent;
+            height: 8px;
+            margin: 0;
+        }}
+        QScrollBar::handle:horizontal {{
+            background: {line};
+            border-radius: 4px;
+            min-width: 32px;
+        }}
+        QScrollBar::handle:horizontal:hover {{
+            background: {muted};
+        }}
+        QScrollBar::add-line, QScrollBar::sub-line {{
+            border: 0;
+            width: 0;
+            height: 0;
+        }}
+        QScrollBar::add-page, QScrollBar::sub-page {{
+            background: transparent;
+        }}
+        QSplitter::handle {{
+            background: transparent;
+            width: 1px;
+        }}
         """)
         for view in (self.web,self.test_view):view.page().runJavaScript('window.setTheme&&setTheme('+json.dumps(dark)+')')
 
@@ -354,7 +558,7 @@ class Window(QMainWindow):
             if self.preview.currentData()==platform:self.reload_map()
         except Exception as exc:self.card_status[platform].setText("删除失败："+str(exc))
     def update_health(self):
-        self.health.setText("下载凭据已配置" if self.settings.get("mapbox_token") else "请配置 Mapbox Token")
+        self.health.setText("🟢 下载凭据已配置" if self.settings.get("mapbox_token") else "🔴 请配置 Mapbox Token")
         if self.plan:self.start.setEnabled(not self.running())
     def test_platform(self,platform):
         if any(self.fields[k].text().strip()!=self.settings.get(k,"") for k,_,_ in GUIDES[platform][1]):self.card_status[platform].setText("请先保存编辑，再测试已保存配置");return

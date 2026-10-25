@@ -182,6 +182,24 @@ def test_real_elevation_smoothing_excludes_nodata(tmp_path):
         a=d.read(1);assert np.max(a)==pytest.approx(100)
 
 
+@pytest.mark.parametrize('sigma,radius',[(0,0),(.2,1),(.4,2),(.9,4),(1.2,5),(5,20)])
+def test_gaussian_kernel_matches_previous_truncation(sigma,radius):
+    from mapdln.engine import gaussian_kernel
+    kernel=gaussian_kernel(sigma)
+    assert len(kernel)==radius*2+1
+    assert np.isfinite(kernel).all()
+    assert kernel.sum()==pytest.approx(1)
+    assert np.array_equal(kernel,kernel[::-1])
+
+
+def test_gaussian_convolution_reflects_at_image_edges():
+    from mapdln.engine import convolve_2d
+    data=np.outer([2.,6.],[1.,2.,8.])
+    # The previous SciPy default repeats the edge pixel (half-sample reflection).
+    expected=np.outer([3.,5.],[1.25,3.25,6.5])
+    assert np.allclose(convolve_2d(data,np.array([.25,.5,.25])),expected)
+
+
 def test_range_archive_blocks_resume_and_validate(tmp_path):
     from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
     payload=bytes(range(256))*9000
