@@ -1,6 +1,6 @@
-# v2.4.0 — 2026-10-25（本地构建）
+# v2.4.0 — 2026-10-25
 
-2026-10-25。当前尚未发布 GitHub Release；源码和本地 EXE 版本为 2.4.0。
+2026-10-25。源码和 Windows EXE 版本为 2.4.0，本次公开发行包含下方 2.2.0、2.3.0 的本地构建更新。Windows 使用完整 ZIP，源码使用 GitHub 自动生成的归档；汇总说明见 [RELEASE-NOTES.md](RELEASE-NOTES.md)。
 
 ## 🚀 新特性 / Features
 
