@@ -1,6 +1,6 @@
 # Mapdln 维护文档
 
-适用版本：2.2.0 本地构建；更新日期：2026-10-25。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
+适用版本：2.3.0 本地构建；更新日期：2026-10-25。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
 
 ## 1. 源码入口与职责
 
@@ -16,7 +16,9 @@
 | `mapdln/worker.py` | 后台命令接收、暂停/继续/取消和结构化事件回传 |
 | `mapdln/server.py` | 仅监听本机的预览服务、静态资源、Mapbox 瓦片和高德安全转发 |
 | `mapdln/config.py` | 用户目录、Windows DPAPI 配置加密、日志遮蔽和请求记录 |
-| `tools/build.ps1`、`tools/mapdln.spec` | 图标生成、完整测试、单文件 EXE 构建及依赖过滤 |
+| `tools/build.ps1`、`tools/mapdln.spec` | 唯一构建流程及打包规则，生成图标、运行测试、构建及验证 EXE、备份并更新根目录入口 |
+| `Mapdln.spec` | 兼容旧打包命令，仅转发到 `tools/mapdln.spec`，不维护第二套过滤规则 |
+| `tools/verify_build.ps1`、`tools/verify_build.py` | 核查包内版本、体积与资源，并在隔离配置/系统 PATH/中文目录下验证冻结后台导出 |
 | `tests/test_engine.py` | 几何、坐标、实际成果、缓存、预算和下载引擎回归 |
 | `tests/test_map_interactions.py` | 原生 Qt 输入进入实际 WebEngine 页面，验证交互与后台锁定 |
 
@@ -87,14 +89,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1
 
 GUI 回归需要可用的 Windows 桌面和 Qt WebEngine。测试使用独立临时 `MAPDLN_HOME`、空账户和合成缓存；原生鼠标事件、滚轮、主键盘/数字键盘 Enter、Delete、右键删点及真实独立后台进程均进入实际程序逻辑。测试通过不等于在线底图授权或真实地形服务已经通过验收。
 
-构建结果为 `dist/mapdln.exe`。必须使用仓库的 spec：它包含 WebEngine、地理运行库、本机页面和图标，并过滤可能与 Windows 系统 ICU 冲突的 DLL。不要用临时 spec 绕过过滤规则。修改 JS/HTML 后必须重新构建，单独修改源码不会更新旧 EXE 内的页面。
+构建结果为 `dist/mapdln.exe`。`tools/mapdln.spec` 包含 WebEngine、地理运行库、本机页面和图标，过滤可能与 Windows 系统 ICU 冲突的 DLL。Qt 裁剪必须在 Analysis 完成后同时处理 `a.binaries` 和 `a.datas`，因为 hooks 会在分析中补入动态库和资源；仅过滤 Analysis 输入无法排除这些文件。新增 Qt 功能时同步维护白名单及成品资源检查，不得直接删除地图所需的 Chromium 内核或地理运行库。地理库不收集测试及重复 Python 源文件；SciPy 已移除，但 NumPy 自带名称含 `libscipy_openblas` 的 DLL 必须保留。
 
-构建后退出旧程序，更新根目录入口并实际启动检查：
+构建使用固定虚拟环境和 PyInstaller `--clean`。完成后检查包内版本、必需页面/图标/Qt 资源、排除项及 220 MiB 体积上限，并通过冻结后台程序的缓存导出。通过后脚本自动备份旧根目录程序到 `test-output/build-backup/mapdln-<旧哈希前12位>.exe`，再更新根目录 `mapdln.exe` 并核对其与 dist 的 SHA-256；前置检查失败不会更新根目录。构建前退出正在运行的旧程序，避免文件占用。不能仅凭后台命令显示“完成”或进程暂时存活就判断打包成功。
+
+修改 JS/HTML 后必须重新构建，单独修改源码不会更新旧 EXE 内的页面。手动复查成品及启动：
 
 ```powershell
-Copy-Item -LiteralPath dist\mapdln.exe -Destination mapdln.exe -Force
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify_build.ps1 -ExePath .\mapdln.exe
+Get-FileHash mapdln.exe,dist\mapdln.exe -Algorithm SHA256
 .\mapdln.exe
 ```
+
+成品检查使用独立空配置、合成瓦片缓存、禁用的外部代理及仅 Windows 系统 PATH；不会改动既有账户。报告保存在 `test-output/build-verification.json`。人工验收时正常启动根目录 EXE，读取原有账户配置，不沿用临时测试的 `MAPDLN_HOME`。
+
+2.3.0 的纯 NumPy 平滑保留四倍 σ 截断、`int(4*sigma+0.5)` 半径、半采样对称边界和 NoData 加权；不要改回零填充边缘。对应回归位于 `tests/test_engine.py`，无需安装 SciPy。
 
 至少检查：四种形状、旋转保留、鼠标预览与实际完成结果、Enter 闭合、右键仅删点、Delete 删除、选区内滚轮、中键拖动、下载锁定、暂停/继续、取消等待退出及成功完成解锁。在线底图、真实下载和纯缓存验证分开记录到 `ACCEPTANCE.md`；不可将离线或源码验证写成最终 EXE 的在线验收。
 
@@ -137,6 +146,7 @@ git status --short
 | 现象 | 检查位置/处理 |
 |---|---|
 | EXE 看不到新功能 | 确认启动的是新构建，更新根目录或 ZIP 内的 EXE，退出仍运行的旧进程 |
+| EXE 体积没变 | 核对根目录/dist 的字节数、修改时间及 SHA-256；运行 `tools/build.ps1` 并确认成品检查成功，勿使用另一套临时 spec |
 | Delete/Enter 不生效 | 先让地图获得焦点；确认不是正在输入表单、未满三点或下载仍锁定 |
 | 右键无法删点 | 必须点击多边形/曲线控制点；完成后的图形至少保留三点；下载中禁止删除 |
 | 取消后暂时仍灰色 | 后台仍等待当前请求或处理块结束；检查任务状态和日志，不要提前解锁 |
@@ -163,3 +173,17 @@ git status --short
 ```
 
 当前未对百度实际授权加载、另一台实体 Windows 电脑和所有在线服务重新验收；后续变更仍需独立验证这些边界。程序未经代码签名。
+
+## 8. 2.3.0 本地构建记录与回退
+
+源码及构建修复提交为 `344d369`（main，2026-10-25），在提交后更新本维护文档；未推送或发布 GitHub Release。完整回归 61 项通过，冻结程序在独立中文目录下的 51 × 51、2 米圆形缓存导出通过，实际请求数 0。地图绘制完整验收由用户核查，在线底图和真实下载仍需独立验收，不能沿用 2.2.0 的在线结论。
+
+根目录与 dist 的最终程序均为 184,278,864 字节（175.74 MiB），比本次保留的旧根目录 EXE 减少 123,913,959 字节（118.17 MiB，40.2%）。SHA-256 为 `2fdc375d47e4f640d4e359edb606019ef6e8e6478254644e0a62c676c09b8561`。完整原因、资源范围及验证边界见 `OPTIMIZATION.md` 和 `ACCEPTANCE.md`。
+
+如需临时恢复本次修复前的根目录入口，先退出程序，再执行：
+
+```powershell
+Copy-Item -LiteralPath test-output\build-backup\mapdln-97a94e466872.exe -Destination mapdln.exe -Force
+```
+
+该备份为 308,192,823 字节。二进制回退不改变源码或 dist；恢复新版本可从 dist 复制，或重新运行正式构建脚本。源码回退按第 6 节使用 `git revert`，不要覆盖未提交工作。旧临时 spec 及草稿说明另存于忽略目录 `test-output/build-rescue/`；这些备份、测试数据和日志不进入公开仓库。
