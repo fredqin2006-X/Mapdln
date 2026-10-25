@@ -1,13 +1,43 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="leaflet.css"><style>
-:root{--card:#ffffff;--ink:#233b34;--field:#f3f6f5;--line:#e1e9e5;--map:#e4ede8;--tint:#e5f5ee}:root.dark{--card:#1d302a;--ink:#e2eeea;--field:#243a32;--line:#334a42;--map:#182b23;--tint:#294d40}
-html,body{margin:0;height:100%;font:13px 'Microsoft YaHei',sans-serif;background:var(--map);color:var(--ink)}#map{height:100%;background:var(--map)}
-#overlay{position:absolute;inset:0;width:100%;height:100%;z-index:500;pointer-events:none;touch-action:none}#overlay.active{pointer-events:auto;cursor:crosshair}#outline{fill:#15b89b33;stroke:#07977f;stroke-width:2;pointer-events:visiblePainted;cursor:move}.handle{fill:white;stroke:#07977f;stroke-width:3;pointer-events:all;cursor:grab}.draft{fill:#15b89b22;stroke:#138d7c;stroke-width:2;stroke-dasharray:6 4;pointer-events:none}.draft-point{fill:white;stroke:#138d7c;stroke-width:2;pointer-events:none}.rotation-stem{stroke:#07977f;stroke-width:2;pointer-events:none}.rotate-handle{fill:#07977f;stroke:white;stroke-width:2;pointer-events:all;cursor:grab}.rotation-icon{fill:white;font-size:15px;text-anchor:middle;dominant-baseline:central;pointer-events:none}.map-panning,.map-panning *{cursor:grabbing!important;user-select:none}
-#tools{position:absolute;top:18px;left:60px;z-index:600;background:var(--card);border:1px solid var(--line);padding:6px;border-radius:8px;display:flex;gap:4px;max-width:calc(100% - 92px);flex-wrap:wrap}button{border:0;border-radius:5px;padding:8px 10px;background:var(--field);color:var(--ink);cursor:pointer}button:hover{background:var(--tint);color:#07977f}button.on{background:#07977f;color:white}
-.selection-locked #outline{fill:#80889055;stroke:#7b848c;pointer-events:none!important;cursor:default}.selection-locked #handles{display:none!important}button:disabled{opacity:.45;cursor:default}
-#status{position:absolute;bottom:32px;left:18px;z-index:600;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:9px 12px;max-width:75%}#hint{position:absolute;top:72px;left:60px;z-index:600;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px;max-width:75%}#hint:empty{display:none}.leaflet-control-attribution{font-size:10px}.leaflet-div-icon{background:transparent;border:none}.leaflet-bar{box-shadow:none;border:1px solid var(--line);border-radius:6px;overflow:hidden}.leaflet-bar a,.leaflet-bar a:hover{background:var(--card);color:var(--ink);border-color:var(--line)}
+:root{--card:rgba(255,255,255,.94);--solid:#ffffff;--ink:#17212b;--muted:#66727f;--field:#f1f4f6;--line:#e2e7ec;--map:#e8edf0;--accent:#0e9f8c;--accent-ink:#ffffff;--tint:#e3f5f1;--danger:#d14343;--danger-tint:#fdecec;--shadow:0 6px 20px rgba(15,23,32,.12),0 1px 3px rgba(15,23,32,.08)}
+:root.dark{--card:rgba(24,30,36,.94);--solid:#181e24;--ink:#e6ebef;--muted:#8c98a4;--field:#222a32;--line:#2c353e;--map:#12171b;--accent:#2ec4ae;--accent-ink:#06201c;--tint:#17332f;--danger:#f07171;--danger-tint:#3a1f22;--shadow:0 6px 22px rgba(0,0,0,.45),0 1px 3px rgba(0,0,0,.3)}
+html,body{margin:0;height:100%;font:13px 'Microsoft YaHei UI','Microsoft YaHei',sans-serif;background:var(--map);color:var(--ink)}#map{height:100%;background:var(--map)}
+#overlay{position:absolute;inset:0;width:100%;height:100%;z-index:500;pointer-events:none;touch-action:none}#overlay.active{pointer-events:auto;cursor:crosshair}
+#outline{fill:#0e9f8c2e;stroke:#0e9f8c;stroke-width:2.2;stroke-linejoin:round;pointer-events:visiblePainted;cursor:move}
+.handle{fill:white;stroke:#0e9f8c;stroke-width:3;pointer-events:all;cursor:grab;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
+.draft{fill:#0e9f8c1f;stroke:#0b8676;stroke-width:2;stroke-dasharray:6 4;stroke-linejoin:round;pointer-events:none}.draft-point{fill:white;stroke:#0b8676;stroke-width:2;pointer-events:none}
+.rotation-stem{stroke:#0e9f8c;stroke-width:2;pointer-events:none}.rotate-handle{fill:#0e9f8c;stroke:white;stroke-width:2;pointer-events:all;cursor:grab;filter:drop-shadow(0 1px 3px rgba(0,0,0,.35))}.rotation-icon{fill:white;font-size:15px;text-anchor:middle;dominant-baseline:central;pointer-events:none}
+.map-panning,.map-panning *{cursor:grabbing!important;user-select:none}
+.selection-locked #outline{fill:#80889055;stroke:#7b848c;stroke-dasharray:7 5;pointer-events:none!important;cursor:default}.selection-locked #handles{display:none!important}
+.chip{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+#tools{position:absolute;top:12px;left:12px;z-index:600;padding:5px;border-radius:12px;display:flex;align-items:center;gap:2px;max-width:calc(100% - 40px);flex-wrap:wrap;user-select:none}
+#tools .sep{width:1px;height:22px;background:var(--line);margin:0 5px}
+button{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:8px;padding:7px 11px;background:transparent;color:var(--ink);font:inherit;cursor:pointer;transition:background .12s,color .12s}
+button svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+button:hover{background:var(--tint);color:var(--accent)}button.on,button.on:hover{background:var(--accent);color:var(--accent-ink)}
+#finish{color:var(--accent);font-weight:600}#finish:hover{background:var(--tint)}#clear:hover{background:var(--danger-tint);color:var(--danger)}
+button:disabled,button:disabled:hover{opacity:.38;cursor:default;background:transparent;color:var(--ink)}
+/* Status text is mirrored by the desktop header; keep the node for diagnostics. */
+#status{display:none;position:absolute;bottom:34px;left:12px;z-index:600;border-radius:999px;padding:7px 14px 7px 28px;max-width:72%;line-height:1.45;color:var(--ink)}
+#status::before{content:'';position:absolute;left:12px;top:50%;width:8px;height:8px;margin-top:-4px;border-radius:50%;background:#e0a526;box-shadow:0 0 0 3px #e0a52633}#status.ok::before{background:var(--accent);box-shadow:0 0 0 3px #0e9f8c33}
+#hint{position:absolute;top:62px;left:12px;z-index:600;border-radius:10px;padding:7px 12px;max-width:min(680px,72%);line-height:1.5;color:var(--muted);font-size:12px;pointer-events:none}#hint:empty{display:none}
+.selection-locked #hint{color:var(--ink);border-color:#7b848c}
+.leaflet-control-attribution{font-size:10px}.leaflet-div-icon{background:transparent;border:none}
+.leaflet-bar{box-shadow:var(--shadow)!important;border:1px solid var(--line)!important;border-radius:10px!important;overflow:hidden}.leaflet-bar a,.leaflet-bar a:hover{background:var(--solid);color:var(--ink);border-color:var(--line)}.leaflet-bar a:hover{color:var(--accent)}
+.leaflet-control-scale-line{background:var(--card);color:var(--ink);border-color:var(--muted)}
 </style></head><body>
 <div id="map"></div><svg id="overlay"><path id="outline"></path><path id="draft" class="draft"></path><g id="draft-points"></g><g id="handles"></g></svg>
-<div id="tools"><button data-tool="pan" class="on">移动</button><button data-tool="rectangle">矩形</button><button data-tool="circle">圆形</button><button data-tool="polygon">多边形</button><button data-tool="curve">插值曲线</button><button id="finish">完成</button><button id="clear">清除</button></div>
-<div id="hint"></div><div id="status">准备地图…</div>
+<div id="tools" class="chip">
+<button data-tool="pan" class="on" title="移动地图 / 编辑选区（Esc）"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>移动</button>
+<span class="sep"></span>
+<button data-tool="rectangle" title="按住左键拖动绘制矩形"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1.5"/></svg>矩形</button>
+<button data-tool="circle" title="按住左键拖动绘制圆形"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>圆形</button>
+<button data-tool="polygon" title="逐点点击，Enter 闭合"><svg viewBox="0 0 24 24"><path d="M5 18 7 6l10-1 3 9-7 5z"/></svg>多边形</button>
+<button data-tool="curve" title="逐点点击，Enter 闭合为平滑曲线"><svg viewBox="0 0 24 24"><path d="M5 15c-1-6 4-10 9-9s7 5 5 9-6 5-9 4-4-1-5-4z"/></svg>插值曲线</button>
+<span class="sep"></span>
+<button id="finish" title="闭合已点击的控制点（Enter）"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>完成</button>
+<button id="clear" title="删除当前选区（Delete）"><svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/></svg>清除</button>
+</div>
+<div id="hint" class="chip"></div><div id="status" class="chip">准备地图…</div>
 <script src="qwebchannel.js"></script><script src="leaflet.js"></script><script src="map.js"></script></body></html>

@@ -10,7 +10,8 @@ const outline=document.getElementById('outline'),handles=document.getElementById
 const mapHost=document.getElementById('map'),draftPoints=document.getElementById('draft-points');
 const base=location.href.substring(0,location.href.lastIndexOf('/')+1);
 window.setTheme=dark=>document.documentElement.classList.toggle('dark',dark);
-function report(message,ok=false){status.textContent=message;if(bridge)bridge.mapStatus(message,ok);}
+function report(message,ok=false){status.textContent=message;status.classList.toggle('ok',!!ok);if(bridge)bridge.mapStatus(message,ok);}
+function leafletMap(){const m=L.map('map',{doubleClickZoom:false,zoomControl:false}).setView([31.2592,121.58901],15);L.control.zoom({position:'bottomright'}).addTo(m);return m;}
 function script(url){return new Promise((resolve,reject)=>{let s=document.createElement('script');const timer=setTimeout(()=>{s.remove();reject(new Error('地图脚本加载超时，请检查网络或预览代理'));},20000);s.src=url;s.onload=()=>{clearTimeout(timer);resolve();};s.onerror=()=>{clearTimeout(timer);reject(new Error('地图脚本加载失败，请检查网络与代理'));};document.head.appendChild(s);});}
 function pixel(p){
  if(!map)return {x:0,y:0};
@@ -116,7 +117,7 @@ window.previewProvider=async function(p){
    ['moving','zoomend','resize'].forEach(e=>map.addEventListener(e,paint));
   }else{
    if(!config.mapbox_available)throw new Error('请到账户配置页保存 Mapbox 公共 Token');
-   map=L.map('map',{doubleClickZoom:false}).setView([31.2592,121.58901],15);
+   map=leafletMap();
    const layer=L.tileLayer(base+'tiles/{z}/{x}/{y}.jpg',{maxZoom:22,attribution:'© Mapbox © Maxar © OpenStreetMap'}).addTo(map);
    L.control.scale({imperial:false}).addTo(map);
    let errors=0;
@@ -130,7 +131,7 @@ window.previewProvider=async function(p){
   report(e.message);
   // Local coordinates remain usable even when an online provider is unavailable.
   provider='offline';system='WGS84';
-  map=L.map('map',{doubleClickZoom:false}).setView([31.2592,121.58901],15);L.control.scale({imperial:false}).addTo(map);map.on('move zoom resize',paint);
+  map=leafletMap();L.control.scale({imperial:false}).addTo(map);map.on('move zoom resize',paint);
   setPan(tool==='pan');if(bridge)bridge.providerReady(system);paint();
  }
 };

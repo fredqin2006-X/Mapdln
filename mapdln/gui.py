@@ -4,11 +4,12 @@ import json
 import sys
 import uuid
 from pathlib import Path
+from string import Template
 from datetime import datetime, timezone
 from PySide6.QtCore import QObject,Signal,Slot,QUrl,QProcess,QTimer,Qt,QStandardPaths
 from PySide6.QtGui import QDesktopServices,QFont,QIcon,QPixmap,QPalette,QColor
-from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,
-    QPushButton,QLineEdit,QComboBox,QDoubleSpinBox,QSpinBox,QStackedWidget,QScrollArea,QGroupBox,
+from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QLabel,
+    QPushButton,QLineEdit,QComboBox,QDoubleSpinBox,QSpinBox,QStackedWidget,QScrollArea,
     QPlainTextEdit,QProgressBar,QFileDialog,QSplitter,QCheckBox,QAbstractSpinBox,
     QGridLayout,QSizePolicy,QStyledItemDelegate,QFrame)
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -87,17 +88,33 @@ class Bridge(QObject):
         w=self.window;w.selection=None;w.grid=None;w.plan=None;w.start.setEnabled(False)
         w.plan_generation+=1
         w.debounce.stop()
-        w.estimate_label.setText("绘制选区或输入 WGS84 中心坐标后预判额度")
+        w.show_estimate(None,"绘制选区或输入 WGS84 中心坐标后预判额度")
         w.area_label.setText("尚未选择区域。支持矩形、圆形、多边形和闭合插值曲线。")
         w.web.page().runJavaScript("updateSelection({controls:[],boundary:[]})")
 
 
-def label(text,wrap=True):
-    w=QLabel(text);w.setWordWrap(wrap);return w
-def button(text,callback,primary=False):
-    w=QPushButton(text);w.clicked.connect(callback)
-    if primary:w.setProperty("primary",True)
+def label(text,wrap=True,role=None,muted=False):
+    w=QLabel(text);w.setWordWrap(wrap)
+    if role:w.setProperty("role",role)
+    if muted:w.setProperty("muted",True)
     return w
+def button(text,callback,primary=False,**props):
+    w=QPushButton(text);w.clicked.connect(callback);w.setCursor(Qt.CursorShape.PointingHandCursor)
+    if primary:w.setProperty("primary",True)
+    for key,value in props.items():w.setProperty(key,value)
+    return w
+def repolish(w):
+    w.style().unpolish(w);w.style().polish(w)
+def card(title=None,caption=None,name="card"):
+    """Rounded surface with an optional heading; returns (frame, body layout)."""
+    frame=QFrame();frame.setObjectName(name);body=QVBoxLayout(frame);body.setContentsMargins(16,14,16,16);body.setSpacing(10)
+    if title:
+        head=QVBoxLayout();head.setSpacing(2);head.addWidget(label(title,False,"title"))
+        if caption:head.addWidget(label(caption,True,muted=True))
+        body.addLayout(head)
+    return frame,body
+def divider():
+    line=QFrame();line.setObjectName("divider");line.setFixedHeight(1);return line
 def resource(name):
     return Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent.parent))/"mapdln"/name
 
@@ -145,14 +162,19 @@ def integer(low,high,value):
 
 def grid_field(grid,row,column,title,field):
     box=QWidget();layout=QVBoxLayout(box);layout.setContentsMargins(0,0,0,0);layout.setSpacing(5)
-    text=label(title,False);text.setProperty("muted",True);layout.addWidget(text);layout.addWidget(field)
+    layout.addWidget(label(title,False,muted=True));layout.addWidget(field)
     grid.addWidget(box,row,column)
 
 
-def form_layout(widget):
-    form=QFormLayout(widget);form.setHorizontalSpacing(12);form.setVerticalSpacing(9)
-    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+def form_layout():
+    # A grid (rather than QFormLayout) keeps labels vertically centred on styled fields.
+    form=QGridLayout();form.setContentsMargins(0,0,0,0);form.setHorizontalSpacing(14);form.setVerticalSpacing(10);form.setColumnStretch(1,1);form._rows=0
     return form
+def form_row(form,title,field):
+    row=form._rows;form._rows+=1
+    form.addWidget(label(title,False,muted=True),row,0,Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+    if isinstance(field,QHBoxLayout):form.addLayout(field,row,1)
+    else:form.addWidget(field,row,1)
 
 
 GUIDES={
@@ -165,6 +187,97 @@ GUIDES={
  "baidu":("百度地图预览",[("baidu_ak","浏览器端 AK",True)],
   "https://lbsyun.baidu.com/apiconsole/key","https://lbsyun.baidu.com/docs/jsapi?title=193",
   "① 打开控制台，按要求注册/认证。\n② 创建浏览器端应用，启用 JavaScript API 服务。\n③ 按实际本机地址设置 Referer 白名单，不默认使用无限制通配符。\n④ 复制浏览器端 AK，保存后在测试区域实际加载地图。\n\n不填写服务端 AK、SK 或 SN。失败时检查 AK 类型、服务权限、Referer 白名单、授权及网络。使用百度额度，不计入 Mapbox。")}
+CAPTIONS={"mapbox":"卫星影像下载 · 开始下载前必需","amap":"地图预览 · 国内默认推荐","baidu":"地图预览 · 国内备选"}
+THEMES={
+ "light":dict(bg="#F3F5F7",surface="#FFFFFF",field="#F7F9FA",sunken="#EFF2F5",ink="#17212B",muted="#66727F",line="#E1E6EB",strong="#C6CED6",
+  accent="#0E9F8C",accent_hover="#0B8676",accent_press="#08705F",on_accent="#FFFFFF",tint="#E3F5F1",danger="#D14343",danger_tint="#FDECEC",
+  warn="#A86412",warn_tint="#FDF1DF",term_bg="#0F161B",term_ink="#C9D4DC"),
+ "dark":dict(bg="#0E1215",surface="#161B20",field="#1C232A",sunken="#12171B",ink="#E6EBEF",muted="#8C98A4",line="#273039",strong="#3A4652",
+  accent="#2EC4AE",accent_hover="#4AD6C1",accent_press="#22A894",on_accent="#06201C",tint="#17332F",danger="#F07171",danger_tint="#3A1F22",
+  warn="#F0B44C",warn_tint="#3A2E17",term_bg="#0A0E11",term_ink="#C9D4DC")}
+STYLE=Template("""
+* { font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI', sans-serif; }
+QMainWindow, QStackedWidget { background: $bg; }
+QWidget { color: $ink; font-size: 13px; }
+QLabel, QCheckBox { background: transparent; }
+QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: 0; }
+QToolTip { background: $surface; color: $ink; border: 1px solid $line; border-radius: 6px; padding: 6px 8px; }
+
+QFrame#topbar, QFrame#card, QFrame#mapCard { background: $surface; border: 1px solid $line; border-radius: 14px; }
+QFrame#stat { background: $sunken; border: 1px solid $line; border-radius: 10px; }
+QFrame#segment { background: $sunken; border: 1px solid $line; border-radius: 11px; }
+QFrame#divider { background: $line; border: 0; }
+QFrame#mapBar { background: transparent; border: 0; }
+
+QLabel#brand { font-size: 19px; font-weight: 700; color: $ink; }
+QLabel[muted="true"] { color: $muted; font-size: 12px; }
+QLabel[role="title"] { font-size: 14px; font-weight: 600; color: $ink; }
+QLabel[role="pageTitle"] { font-size: 22px; font-weight: 600; color: $ink; }
+QLabel[role="stat"] { font-size: 16px; font-weight: 600; color: $ink; }
+QLabel[role="stage"] { font-size: 13px; font-weight: 600; color: $ink; }
+QLabel[role="info"] { font-size: 12px; color: $ink; }
+QLabel[role="version"] { background: $tint; color: $accent; border-radius: 8px; padding: 1px 8px; font-size: 11px; font-weight: 600; }
+QLabel[role="callout"] { background: $sunken; border: 1px solid $line; border-left: 3px solid $accent; border-radius: 8px; padding: 10px 12px; color: $ink; font-size: 12px; }
+QLabel#health { border-radius: 13px; padding: 5px 12px; font-size: 12px; font-weight: 600; }
+QLabel#health[state="ok"] { background: $tint; color: $accent; }
+QLabel#health[state="warn"] { background: $warn_tint; color: $warn; }
+
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background: $field; border: 1px solid $line; border-radius: 8px; padding: 6px 10px; min-height: 20px;
+    selection-background-color: $accent; selection-color: $on_accent; }
+QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover { border-color: $strong; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: $accent; background: $surface; }
+QLineEdit:read-only { color: $muted; }
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { color: $muted; background: $sunken; border-color: $line; }
+QComboBox { padding-right: 30px; }
+QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 30px; border: 0; background: transparent; }
+QComboBox::down-arrow { image: url("$arrow"); width: 16px; height: 16px; }
+QComboBox QAbstractItemView { background: $surface; border: 1px solid $line; border-radius: 10px; padding: 6px; outline: 0;
+    selection-background-color: $tint; selection-color: $accent; }
+QComboBox QAbstractItemView::item { min-height: 32px; padding: 4px 10px; border-radius: 6px; margin: 1px 0; }
+QComboBox QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:hover { background: $tint; color: $accent; }
+QFrame#comboPopup { border: 0; background: $surface; }
+
+QPushButton { background: $surface; border: 1px solid $line; border-radius: 8px; padding: 6px 14px; min-height: 20px; }
+QPushButton:hover { border-color: $accent; color: $accent; }
+QPushButton:pressed { background: $tint; }
+QPushButton:disabled { color: $muted; background: $sunken; border-color: $line; }
+QPushButton[primary="true"] { background: $accent; color: $on_accent; border: 1px solid $accent; font-weight: 600; }
+QPushButton[primary="true"]:hover { background: $accent_hover; border-color: $accent_hover; color: $on_accent; }
+QPushButton[primary="true"]:pressed { background: $accent_press; border-color: $accent_press; }
+QPushButton[primary="true"]:disabled { background: $line; border-color: $line; color: $muted; }
+QPushButton[danger="true"]:hover { border-color: $danger; color: $danger; background: $danger_tint; }
+QPushButton[large="true"] { padding: 9px 26px; font-size: 14px; }
+QPushButton[nav="true"] { background: transparent; border: 0; border-radius: 8px; padding: 6px 20px; color: $muted; font-weight: 600; }
+QPushButton[nav="true"]:hover { color: $ink; }
+QPushButton[nav="true"]:checked { background: $surface; color: $accent; }
+QPushButton[chip="true"] { border-radius: 12px; padding: 3px 0; min-height: 18px; font-size: 12px; background: $field; }
+QPushButton[chip="true"]:checked { background: $tint; color: $accent; border-color: $accent; font-weight: 600; }
+QPushButton#disclosure { text-align: left; padding: 11px 16px; border-radius: 14px; background: $surface; font-weight: 600; }
+QPushButton#disclosure:checked { color: $accent; border-color: $accent; }
+
+QProgressBar { border: 0; border-radius: 7px; background: $sunken; min-height: 14px; max-height: 14px; text-align: center; font-size: 10px; font-weight: 600; color: $ink; }
+QProgressBar::chunk { background: $accent; border-radius: 7px; }
+QPlainTextEdit#terminal { background: $term_bg; color: $term_ink; border: 1px solid $line; border-radius: 10px; padding: 6px;
+    font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 12px; selection-background-color: $accent; selection-color: $on_accent; }
+
+QCheckBox { spacing: 6px; color: $muted; }
+QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid $strong; border-radius: 4px; background: $field; }
+QCheckBox::indicator:hover { border-color: $accent; }
+QCheckBox::indicator:checked { background: $accent; border-color: $accent;
+    image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTAiIHZpZXdCb3g9IjAgMCAxMiAxMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEgNUw0LjUgOC41TDExIDEiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPgo=); }
+
+QScrollBar:vertical { border: 0; background: transparent; width: 8px; margin: 2px; }
+QScrollBar::handle:vertical { background: $strong; border-radius: 3px; min-height: 32px; }
+QScrollBar::handle:vertical:hover { background: $muted; }
+QScrollBar:horizontal { border: 0; background: transparent; height: 8px; margin: 2px; }
+QScrollBar::handle:horizontal { background: $strong; border-radius: 3px; min-width: 32px; }
+QScrollBar::handle:horizontal:hover { background: $muted; }
+QScrollBar::add-line, QScrollBar::sub-line { border: 0; width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QSplitter::handle { background: transparent; }
+""")
+ADVANCED_TITLE="高级设置 · 坐标、网络与终端日志"
 
 
 class Window(QMainWindow):
@@ -179,20 +292,20 @@ class Window(QMainWindow):
         self.jobs=Jobs(self)
         assets=resource("web")
         self.server=PreviewServer(assets,lambda:dict(self.settings))
-        central=QWidget();self.setCentralWidget(central);layout=QVBoxLayout(central);layout.setContentsMargins(28,24,28,24);layout.setSpacing(18)
-        # 现代化顶栏：品牌 + 导航 + 状态
-        header=QHBoxLayout();header.setSpacing(16)
-        mark=QLabel();mark.setPixmap(QPixmap(str(resource('assets/app.png'))).scaled(48,48,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation));header.addWidget(mark)
-        title=QVBoxLayout();title.setSpacing(4)
-        name=label("Mapdln",False);name.setObjectName("brand");title.addWidget(name)
-        subtitle=label("高精度卫星地图与地形数据采集工具",False);subtitle.setProperty("muted",True);title.addWidget(subtitle)
-        header.addLayout(title);header.addStretch()
-        # 导航按钮组
-        nav_group=QHBoxLayout();nav_group.setSpacing(8)
-        self.work_nav=button("🗺️ 下载工作台",lambda:self.navigate(0));self.account_nav=button("⚙️ 账户配置",lambda:self.navigate(1))
-        nav_group.addWidget(self.work_nav);nav_group.addWidget(self.account_nav)
-        header.addLayout(nav_group)
-        self.health=label("● 未配置下载凭据",False);self.health.setProperty("muted",True);header.addWidget(self.health);layout.addLayout(header)
+        central=QWidget();self.setCentralWidget(central);layout=QVBoxLayout(central);layout.setContentsMargins(16,14,16,16);layout.setSpacing(14)
+        # 顶栏：品牌（左）· 分段导航（中）· 凭据状态（右）
+        top=QFrame();top.setObjectName("topbar");header=QHBoxLayout(top);header.setContentsMargins(16,10,16,10);header.setSpacing(12)
+        mark=QLabel();mark.setPixmap(QPixmap(str(resource('assets/app.png'))).scaled(36,36,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation));header.addWidget(mark)
+        title=QVBoxLayout();title.setSpacing(0);brand=QHBoxLayout();brand.setSpacing(8)
+        name=label("Mapdln",False);name.setObjectName("brand");brand.addWidget(name);brand.addWidget(label("v"+__version__,False,"version"),0,Qt.AlignmentFlag.AlignVCenter);brand.addStretch()
+        title.addLayout(brand);title.addWidget(label("卫星影像与地形数据下载工作台",False,muted=True))
+        header.addLayout(title,1)
+        nav=QFrame();nav.setObjectName("segment");nav_group=QHBoxLayout(nav);nav_group.setContentsMargins(3,3,3,3);nav_group.setSpacing(2)
+        self.work_nav=button("下载工作台",lambda:self.navigate(0),nav=True);self.account_nav=button("账户配置",lambda:self.navigate(1),nav=True)
+        for b in (self.work_nav,self.account_nav):b.setCheckable(True);nav_group.addWidget(b)
+        header.addWidget(nav)
+        right=QHBoxLayout();right.addStretch();self.health=label("● 未配置下载凭据",False);self.health.setObjectName("health");right.addWidget(self.health);header.addLayout(right,1)
+        layout.addWidget(top)
         self.pages=QStackedWidget();layout.addWidget(self.pages,1);self.build_workbench();self.build_accounts()
         self.debounce=QTimer(self);self.debounce.setSingleShot(True);self.debounce.setInterval(350);self.debounce.timeout.connect(self.calculate)
         self.ledger_timer=QTimer(self);self.ledger_timer.timeout.connect(self.refresh_quota);self.ledger_timer.start(15000)
@@ -202,300 +315,116 @@ class Window(QMainWindow):
 
     def apply_theme(self):
         dark=QApplication.styleHints().colorScheme()==Qt.ColorScheme.Dark
-        self.theme_dark=dark
-        # 现代化深色梯度配色：从深邃到浮起的五层表面
-        bg,surface1,surface2,ink,muted,line,accent,accent_hover=("#0A0D12","#0F131C","#161D2B","#E8EDF3","#9AA5B8","#1E2636","#38BDF8","#22A8E8") if dark else ("#F8FAFB","#FFFFFF","#F3F6F8","#1A2332","#6B7785","#DFE4EA","#38BDF8","#22A8E8")
-        arrow=resource('assets/chevron-dark.svg' if dark else 'assets/chevron-light.svg').as_posix()
+        self.theme_dark=dark;c=dict(THEMES["dark" if dark else "light"])
+        c["arrow"]=resource('assets/chevron-dark.svg' if dark else 'assets/chevron-light.svg').as_posix()
         palette=QPalette()
-        for role,color in ((QPalette.ColorRole.Window,bg),(QPalette.ColorRole.WindowText,ink),(QPalette.ColorRole.Base,surface1),(QPalette.ColorRole.Text,ink),(QPalette.ColorRole.Button,surface1),(QPalette.ColorRole.ButtonText,ink),(QPalette.ColorRole.Highlight,accent),(QPalette.ColorRole.HighlightedText,'#FFFFFF')):palette.setColor(role,QColor(color))
-        for role in (QPalette.ColorRole.Text,QPalette.ColorRole.ButtonText):palette.setColor(QPalette.ColorGroup.Disabled,role,QColor(muted))
+        for role,color in ((QPalette.ColorRole.Window,c["bg"]),(QPalette.ColorRole.WindowText,c["ink"]),(QPalette.ColorRole.Base,c["field"]),(QPalette.ColorRole.AlternateBase,c["sunken"]),(QPalette.ColorRole.Text,c["ink"]),(QPalette.ColorRole.Button,c["surface"]),(QPalette.ColorRole.ButtonText,c["ink"]),(QPalette.ColorRole.Highlight,c["accent"]),(QPalette.ColorRole.HighlightedText,c["on_accent"]),(QPalette.ColorRole.PlaceholderText,c["muted"])):palette.setColor(role,QColor(color))
+        for role in (QPalette.ColorRole.Text,QPalette.ColorRole.ButtonText,QPalette.ColorRole.WindowText):palette.setColor(QPalette.ColorGroup.Disabled,role,QColor(c["muted"]))
         QApplication.setPalette(palette)
-        self.setStyleSheet(f"""
-        * {{
-            font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        }}
-        QMainWindow {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg}, stop:1 {surface1});
-        }}
-        QWidget {{
-            color: {ink};
-            font-size: 13px;
-            font-weight: 400;
-        }}
-        QLabel, QCheckBox {{
-            background: transparent;
-        }}
-        QLabel[muted="true"] {{
-            color: {muted};
-            font-size: 12px;
-            font-weight: 400;
-            line-height: 1.5;
-        }}
-        QLabel#brand {{
-            font-size: 24px;
-            font-weight: 600;
-            color: {accent};
-            letter-spacing: -0.3px;
-        }}
-        QGroupBox {{
-            background: {surface2};
-            border: 1px solid {line};
-            border-radius: 16px;
-            margin-top: 14px;
-            padding: 20px 16px 16px;
-            font-weight: 400;
-            font-size: 13px;
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 18px;
-            padding: 0 6px;
-            color: {ink};
-            font-size: 13px;
-            font-weight: 500;
-        }}
-        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {{
-            background: {surface1};
-            border: 1px solid {line};
-            border-radius: 8px;
-            padding: 10px 12px;
-            selection-background-color: {accent};
-            selection-color: white;
-            font-size: 13px;
-        }}
-        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {{
-            border: 2px solid {accent};
-            padding: 9px 11px;
-        }}
-        QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {{
-            border-color: {accent};
-        }}
-        QComboBox {{
-            padding-right: 32px;
-        }}
-        QComboBox::drop-down {{
-            subcontrol-origin: padding;
-            subcontrol-position: center right;
-            width: 32px;
-            border: 0;
-            background: transparent;
-        }}
-        QComboBox::down-arrow {{
-            image: url("{arrow}");
-            width: 18px;
-            height: 18px;
-        }}
-        QComboBox QAbstractItemView {{
-            background: {surface2};
-            border: 1px solid {line};
-            border-radius: 12px;
-            padding: 8px;
-            outline: 0;
-            selection-background-color: {accent};
-            selection-color: white;
-        }}
-        QComboBox QAbstractItemView::item {{
-            min-height: 36px;
-            padding: 6px 12px;
-            border-radius: 8px;
-            margin: 2px 0;
-        }}
-        QComboBox QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:hover {{
-            background: {accent};
-            color: white;
-        }}
-        QFrame#comboPopup {{
-            border: 0;
-            background: {surface2};
-        }}
-        QSpinBox:disabled, QDoubleSpinBox:disabled {{
-            color: {muted};
-            border-color: {line};
-        }}
-        QPushButton {{
-            background: {surface1};
-            border: 1px solid {line};
-            border-radius: 8px;
-            padding: 10px 16px;
-            font-weight: 400;
-            font-size: 13px;
-        }}
-        QPushButton:hover {{
-            background: {surface2};
-            border-color: {accent};
-            color: {accent};
-        }}
-        QPushButton:checked {{
-            background: {accent};
-            border-color: {accent};
-            color: white;
-        }}
-        QPushButton:pressed {{
-            background: {line};
-            transform: scale(0.98);
-        }}
-        QPushButton:disabled {{
-            color: {muted};
-            border-color: {line};
-            background: {surface1};
-        }}
-        QPushButton[primary="true"] {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {accent}, stop:1 {accent_hover});
-            color: white;
-            border: 1px solid {accent};
-            font-weight: 500;
-            padding: 11px 20px;
-        }}
-        QPushButton[primary="true"]:hover {{
-            background: {accent_hover};
-            border-color: {accent_hover};
-        }}
-        QPushButton[primary="true"]:disabled {{
-            background: {line};
-            color: {muted};
-            border-color: {line};
-        }}
-        QProgressBar {{
-            border: 0;
-            border-radius: 999px;
-            background: {line};
-            text-align: center;
-            min-height: 20px;
-            max-height: 20px;
-            font-size: 11px;
-            font-weight: 500;
-            color: {ink};
-        }}
-        QProgressBar::chunk {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent}, stop:1 {accent_hover});
-            border-radius: 999px;
-        }}
-        QScrollArea {{
-            border: 0;
-            background: transparent;
-        }}
-        QCheckBox {{
-            spacing: 8px;
-        }}
-        QCheckBox::indicator {{
-            width: 18px;
-            height: 18px;
-            border: 2px solid {line};
-            border-radius: 5px;
-            background: {surface1};
-        }}
-        QCheckBox::indicator:hover {{
-            border-color: {accent};
-        }}
-        QCheckBox::indicator:checked {{
-            background: {accent};
-            border-color: {accent};
-            image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTAiIHZpZXdCb3g9IjAgMCAxMiAxMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEgNUw0LjUgOC41TDExIDEiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPgo=);
-        }}
-        QScrollBar:vertical {{
-            border: 0;
-            background: transparent;
-            width: 8px;
-            margin: 0;
-        }}
-        QScrollBar::handle:vertical {{
-            background: {line};
-            border-radius: 4px;
-            min-height: 32px;
-        }}
-        QScrollBar::handle:vertical:hover {{
-            background: {muted};
-        }}
-        QScrollBar:horizontal {{
-            border: 0;
-            background: transparent;
-            height: 8px;
-            margin: 0;
-        }}
-        QScrollBar::handle:horizontal {{
-            background: {line};
-            border-radius: 4px;
-            min-width: 32px;
-        }}
-        QScrollBar::handle:horizontal:hover {{
-            background: {muted};
-        }}
-        QScrollBar::add-line, QScrollBar::sub-line {{
-            border: 0;
-            width: 0;
-            height: 0;
-        }}
-        QScrollBar::add-page, QScrollBar::sub-page {{
-            background: transparent;
-        }}
-        QSplitter::handle {{
-            background: transparent;
-            width: 1px;
-        }}
-        """)
+        self.setStyleSheet(STYLE.substitute(c))
         for view in (self.web,self.test_view):view.page().runJavaScript('window.setTheme&&setTheme('+json.dumps(dark)+')')
 
     def navigate(self,index):
         self.pages.setCurrentIndex(index)
-        for w,on in ((self.work_nav,index==0),(self.account_nav,index==1)):
-            w.setProperty("primary",on);w.style().unpolish(w);w.style().polish(w)
+        for w,on in ((self.work_nav,index==0),(self.account_nav,index==1)):w.setChecked(on)
         if index==1:self.refresh_quota()
 
     def build_workbench(self):
-        work=QWidget();outer=QVBoxLayout(work);outer.setContentsMargins(0,0,0,0);split=QSplitter(Qt.Orientation.Horizontal)
-        self.side_scroll=scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setMinimumWidth(350);scroll.setMaximumWidth(410);scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        pane=QWidget();side=QVBoxLayout(pane);side.setContentsMargins(0,0,8,4);side.setSpacing(12);group=QGroupBox("下载参数");form=form_layout(group)
-        self.name=QLineEdit("地图_"+datetime.now().strftime("%m%d_%H%M"));form.addRow("任务名称",self.name)
-        self.preview=combo([("高德 · 国内推荐","amap"),("百度 · 国内预览","baidu"),("Mapbox · 全球卫星","mapbox")]);self.preview.setCurrentIndex(max(0,self.preview.findData(self.settings.get("preview_provider","amap"))));form.addRow("预览地图",self.preview)
-        self.elevation=combo([("纯黑平坦 · 0 米","flat"),("真实地形 · FABDEM","real")]);form.addRow("高程模式",self.elevation)
-        self.resolution=number(.01,1000,1,2);self.resolution.setSuffix(" m/px");form.addRow("输出分辨率",self.resolution)
-        presets=QHBoxLayout()
-        for n in (.5,1,2,5):presets.addWidget(button(str(n)+" m",lambda _,v=n:self.resolution.setValue(v)))
-        form.addRow("",presets);self.zoom=integer(0,22,17);form.addRow("卫星瓦片层级",self.zoom)
+        work=QWidget();outer=QVBoxLayout(work);outer.setContentsMargins(0,0,0,0);split=QSplitter(Qt.Orientation.Horizontal);split.setHandleWidth(8);split.setChildrenCollapsible(False)
+        self.side_scroll=scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setMinimumWidth(360);scroll.setMaximumWidth(430);scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);scroll.setFrameShape(QFrame.Shape.NoFrame)
+        pane=QWidget();side=QVBoxLayout(pane);side.setContentsMargins(0,0,8,2);side.setSpacing(12)
+        # 任务：名称与输出位置
+        group,body=card("任务");form=form_layout();body.addLayout(form)
+        self.name=QLineEdit("地图_"+datetime.now().strftime("%m%d_%H%M"));form_row(form,"任务名称",self.name)
         download_dir=QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
-        self.output=QLineEdit(str((Path(download_dir) if download_dir else Path.home()/"Downloads")/"Mapdln"));outrow=QHBoxLayout();outrow.addWidget(self.output);outrow.addWidget(button("…",self.choose_output));form.addRow("输出位置",outrow)
-        note=label("视图缩放、瓦片层级与输出分辨率独立。1 米像素不等于 1 米定位精度。");note.setProperty("muted",True);form.addRow(note);side.addWidget(group)
-        self.task_card=taskbar=QGroupBox("任务进度");tl=QVBoxLayout(taskbar);tl.setSpacing(10);self.stage=label("待开始 · 在地图上绘制选区");tl.addWidget(self.stage)
-        self.progress=QProgressBar();self.progress.setValue(0);tl.addWidget(self.progress)
-        controls=QHBoxLayout();self.pause=button("暂停",lambda:self.command("pause"));self.resume=button("继续",lambda:self.command("resume"));self.cancel=button("取消",lambda:self.command("cancel"))
-        for b in (self.pause,self.resume,self.cancel):b.setEnabled(False);controls.addWidget(b)
-        tl.addLayout(controls);self.flat_retry=button("改用 0 米继续导出",self.retry_flat);self.flat_retry.hide();tl.addWidget(self.flat_retry)
-        actions=QHBoxLayout();self.start=button("开始下载",lambda:self.start_task(),True);self.start.setEnabled(False);actions.addWidget(self.start,2);actions.addWidget(button("输出目录",self.open_output),1);tl.addLayout(actions);side.addWidget(taskbar)
-        budgetgroup=QGroupBox("下载前额度预判");bf=QVBoxLayout(budgetgroup);self.estimate_label=label("绘制选区或输入 WGS84 中心坐标后预判额度");bf.addWidget(self.estimate_label)
-        self.balance_label=label("账户剩余额度未知");bf.addWidget(self.balance_label);bf.addWidget(button("重新检查缓存 / 额度",self.replan))
-        self.preview_usage=label("高德 / 百度预览不产生 Mapbox 请求");bf.addWidget(self.preview_usage)
-        self.reserve=integer(0,100,10);rr=QHBoxLayout();rr.addWidget(label("重试预留 %",False));rr.addWidget(self.reserve);bf.addLayout(rr)
-        self.budget=integer(0,1000000,0);self.budget.setSpecialValueText("不限 · 仅本机预算");br=QHBoxLayout();br.addWidget(label("任务请求预算",False));br.addWidget(self.budget);bf.addLayout(br)
+        self.output=QLineEdit(str((Path(download_dir) if download_dir else Path.home()/"Downloads")/"Mapdln"));self.output.setToolTip("任务成果保存在 输出位置 / 任务名称")
+        outrow=QHBoxLayout();outrow.setSpacing(6);outrow.addWidget(self.output,1);browse=button("浏览",self.choose_output);outrow.addWidget(browse);form_row(form,"输出位置",outrow)
+        side.addWidget(group)
+        # 地图与输出参数
+        group,body=card("地图与输出","视图缩放、瓦片层级与输出分辨率相互独立；1 米像素不等于 1 米定位精度。");form=form_layout();body.addLayout(form)
+        self.preview=combo([("高德 · 国内推荐","amap"),("百度 · 国内预览","baidu"),("Mapbox · 全球卫星","mapbox")]);self.preview.setCurrentIndex(max(0,self.preview.findData(self.settings.get("preview_provider","amap"))));form_row(form,"预览地图",self.preview)
+        self.elevation=combo([("纯黑平坦 · 0 米","flat"),("真实地形 · FABDEM","real")]);form_row(form,"高程模式",self.elevation)
+        self.resolution=number(.01,1000,1,2);self.resolution.setSuffix(" m/px");form_row(form,"输出分辨率",self.resolution)
+        presets=QHBoxLayout();presets.setSpacing(6);self.resolution_chips={}
+        def sync_chips(value):
+            for n,chip in self.resolution_chips.items():chip.setChecked(abs(value-n)<1e-9)
+        for n in (.5,1,2,5):
+            chip=button(f"{n:g} m",lambda _,v=n:(self.resolution.setValue(v),sync_chips(v)),chip=True);chip.setCheckable(True);self.resolution_chips[n]=chip;presets.addWidget(chip)
+        self.resolution.valueChanged.connect(sync_chips);sync_chips(self.resolution.value())
+        form_row(form,"",presets);self.zoom=integer(0,22,17);form_row(form,"卫星瓦片层级",self.zoom)
+        side.addWidget(group)
+        # 额度预判
+        budgetgroup,bf=card("下载前额度预判","按实际选区与瓦片相交计算，并扣除有效缓存")
+        self.estimate_stats=QWidget();sg=QGridLayout(self.estimate_stats);sg.setContentsMargins(0,0,0,0);sg.setSpacing(8);self.stat_values={}
+        for i,(key,caption) in enumerate((("tiles","所需瓦片"),("cache","有效缓存"),("new","新增请求"),("reserve","含重试预留"),("network","预计网络"),("size","输出像素"))):
+            tile=QFrame();tile.setObjectName("stat");tv=QVBoxLayout(tile);tv.setContentsMargins(10,7,10,8);tv.setSpacing(1)
+            value=label("—",False,"stat");tv.addWidget(value);tv.addWidget(label(caption,False,muted=True));sg.addWidget(tile,i//2,i%2);self.stat_values[key]=value
+        sg.setColumnStretch(0,1);sg.setColumnStretch(1,1);bf.addWidget(self.estimate_stats)
+        self.estimate_label=label("绘制选区或输入 WGS84 中心坐标后预判额度",muted=True);bf.addWidget(self.estimate_label)
+        bf.addWidget(divider())
+        self.balance_label=label("账户剩余额度未知");bf.addWidget(self.balance_label)
+        self.preview_usage=label("高德 / 百度预览不产生 Mapbox 请求",muted=True);bf.addWidget(self.preview_usage)
+        limits=form_layout();self.reserve=integer(0,100,10);self.reserve.setSuffix(" %");form_row(limits,"重试预留",self.reserve)
+        self.budget=integer(0,1000000,0);self.budget.setSpecialValueText("不限 · 仅本机预算");form_row(limits,"任务请求预算",self.budget);bf.addLayout(limits)
+        bf.addWidget(button("重新检查缓存 / 额度",self.replan))
         side.addWidget(budgetgroup)
-        self.advanced_toggle=button("高级设置 · 坐标与网络",lambda:None);self.advanced_toggle.setCheckable(True);side.addWidget(self.advanced_toggle)
+        # 高级设置
+        self.advanced_toggle=button("▸  "+ADVANCED_TITLE,lambda:None);self.advanced_toggle.setObjectName("disclosure");self.advanced_toggle.setCheckable(True);side.addWidget(self.advanced_toggle)
         self.advanced=QWidget();av=QVBoxLayout(self.advanced);av.setContentsMargins(0,0,0,0);av.setSpacing(12)
-        self.coordinate_card=geom=QGroupBox("WGS84 坐标 / 米制尺寸");gf=QVBoxLayout(geom);coords=QGridLayout();coords.setHorizontalSpacing(12);coords.setVerticalSpacing(10);coords.setColumnStretch(0,1);coords.setColumnStretch(1,1)
+        self.coordinate_card,gf=card("WGS84 坐标 / 米制尺寸","直接输入中心点创建矩形或圆形选区，并定位地图");coords=QGridLayout();coords.setHorizontalSpacing(12);coords.setVerticalSpacing(10);coords.setColumnStretch(0,1);coords.setColumnStretch(1,1)
         self.lon=number(-180,180,121.58901,7);self.lat=number(-80,84,31.2592,7)
         self.input_shape=combo([("矩形","rectangle"),("圆形","circle")]);self.width_m=number(.1,100000,200,1);self.height_m=number(.1,100000,200,1);self.radius_m=number(.1,50000,100,1)
         for i,(title,field) in enumerate((("经度",self.lon),("纬度",self.lat),("形状",self.input_shape),("圆形半径 · 米",self.radius_m),("矩形宽 · 米",self.width_m),("矩形高 · 米",self.height_m))):grid_field(coords,i//2,i%2,title,field)
-        gf.addLayout(coords);gf.addWidget(button("应用选区 / 定位",self.apply_coordinates));av.addWidget(geom)
+        gf.addLayout(coords);gf.addWidget(button("应用选区 / 定位",self.apply_coordinates));av.addWidget(self.coordinate_card)
         def shape_fields():
             circle=self.input_shape.currentData()=='circle';self.radius_m.setEnabled(circle);self.width_m.setEnabled(not circle);self.height_m.setEnabled(not circle)
         self.input_shape.currentIndexChanged.connect(shape_fields);shape_fields()
-        network=QGroupBox("下载与网络");nf=QVBoxLayout(network);self.proxy=QLineEdit();self.proxy.setPlaceholderText("HTTP / SOCKS 代理 URL · 仅本次会话");nf.addWidget(self.proxy)
+        network,nf=card("下载与网络");self.proxy=QLineEdit();self.proxy.setPlaceholderText("HTTP / SOCKS 代理 URL · 仅本次会话");nf.addWidget(self.proxy)
         row=QHBoxLayout();row.addWidget(button("应用代理",self.apply_proxy));row.addWidget(button("网络测试",self.test_network));nf.addLayout(row)
         opts=QGridLayout();opts.setHorizontalSpacing(12);opts.setVerticalSpacing(10);opts.setColumnStretch(0,1);opts.setColumnStretch(1,1)
         self.concurrency=integer(1,8,4);self.retries=integer(0,10,3);self.connect_timeout=integer(1,120,10);self.read_timeout=integer(1,300,30);self.bits=combo([("16 位",16),("8 位",8)]);self.smooth=number(0,5,0,1)
         for i,(title,field) in enumerate((("并发",self.concurrency),("重试",self.retries),("连接超时 · 秒",self.connect_timeout),("读取超时 · 秒",self.read_timeout),("高度位深",self.bits),("平滑 σ",self.smooth))):grid_field(opts,i//2,i%2,title,field)
         nf.addLayout(opts);av.addWidget(network)
-        terminal=QGroupBox("终端日志");lf=QVBoxLayout(terminal);self.logs=QPlainTextEdit();self.logs.setReadOnly(True);self.logs.setMaximumBlockCount(4000);self.logs.setFixedHeight(170);lf.addWidget(self.logs)
+        terminal,lf=card("终端日志","凭据与代理已遮蔽");self.logs=QPlainTextEdit();self.logs.setObjectName("terminal");self.logs.setReadOnly(True);self.logs.setMaximumBlockCount(4000);self.logs.setFixedHeight(190);lf.addWidget(self.logs)
         lr=QHBoxLayout();lr.addWidget(button("复制日志",lambda:QApplication.clipboard().setText(self.logs.toPlainText())));lr.addWidget(button("保存日志",self.save_log));lf.addLayout(lr);av.addWidget(terminal)
-        av.insertWidget(0,button("收起高级设置",lambda:self.advanced_toggle.setChecked(False)))
         side.addWidget(self.advanced);self.advanced.hide();self.advanced_toggle.toggled.connect(self.show_advanced);side.addStretch();scroll.setWidget(pane);split.addWidget(scroll)
-        center=QWidget();cl=QVBoxLayout(center);cl.setContentsMargins(8,0,0,0);cl.setSpacing(8);self.map_status=label("地图预览与卫星下载来源独立");cl.addWidget(self.map_status)
-        self.web=self.make_web(False);cl.addWidget(self.web,1);self.area_label=label("尚未选择区域。支持矩形、圆形、多边形和闭合插值曲线。");cl.addWidget(self.area_label);split.addWidget(center);split.setStretchFactor(1,1);outer.addWidget(split,1)
+        # 中央：地图卡片 + 底部任务栏
+        center=QWidget();cl=QVBoxLayout(center);cl.setContentsMargins(0,0,0,0);cl.setSpacing(12)
+        mapcard=QFrame();mapcard.setObjectName("mapCard");ml=QVBoxLayout(mapcard);ml.setContentsMargins(1,1,1,1);ml.setSpacing(0)
+        bar=QFrame();bar.setObjectName("mapBar");bl=QHBoxLayout(bar);bl.setContentsMargins(15,9,15,9);bl.setSpacing(12)
+        bl.addWidget(label("地图预览",False,"title"));self.map_status=label("地图预览与卫星下载来源独立",muted=True);bl.addWidget(self.map_status,1);ml.addWidget(bar)
+        self.web=self.make_web(False);ml.addWidget(self.web,1)
+        foot=QFrame();foot.setObjectName("mapBar");fl=QHBoxLayout(foot);fl.setContentsMargins(15,8,15,9)
+        self.area_label=label("尚未选择区域。支持矩形、圆形、多边形和闭合插值曲线。",role="info");fl.addWidget(self.area_label,1);ml.addWidget(foot)
+        cl.addWidget(mapcard,1)
+        self.task_card,tl=card();tl.setContentsMargins(16,12,16,14);tl.setSpacing(8)
+        head=QHBoxLayout();head.setSpacing(12);head.addWidget(label("任务进度",False,"title"),0,Qt.AlignmentFlag.AlignTop)
+        self.stage=label("待开始 · 在地图上绘制选区",role="stage");head.addWidget(self.stage,1);tl.addLayout(head)
+        row=QHBoxLayout();row.setSpacing(8)
+        self.progress=QProgressBar();self.progress.setValue(0);row.addWidget(self.progress,1);row.addSpacing(6)
+        self.pause=button("暂停",lambda:self.command("pause"));self.resume=button("继续",lambda:self.command("resume"));self.cancel=button("取消",lambda:self.command("cancel"),danger=True)
+        for b in (self.pause,self.resume,self.cancel):b.setEnabled(False);row.addWidget(b)
+        self.flat_retry=button("改用 0 米继续导出",self.retry_flat);self.flat_retry.hide();row.addWidget(self.flat_retry)
+        row.addSpacing(6);row.addWidget(button("输出目录",self.open_output))
+        self.start=button("开始下载",lambda:self.start_task(),True,large=True);self.start.setEnabled(False);row.addWidget(self.start)
+        tl.addLayout(row);cl.addWidget(self.task_card)
+        split.addWidget(center);split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([400,1100]);outer.addWidget(split,1)
         self.pages.addWidget(work)
         self.preview.currentIndexChanged.connect(self.reload_map)
         for w in (self.resolution,self.zoom,self.reserve):w.valueChanged.connect(self.replan)
 
     def show_advanced(self,on):
-        self.advanced.setVisible(on)
-        QTimer.singleShot(0,lambda:self.side_scroll.ensureWidgetVisible(self.coordinate_card if on else self.task_card))
+        self.advanced.setVisible(on);self.advanced_toggle.setText(("▾  " if on else "▸  ")+ADVANCED_TITLE)
+        if on:QTimer.singleShot(0,lambda:self.side_scroll.ensureWidgetVisible(self.coordinate_card))
+
+    def show_estimate(self,result=None,message=""):
+        values={}
+        if result:
+            values={"tiles":f"{result['tiles']:,}","cache":f"{result['cache']:,}","new":f"{result['new_requests']:,}","reserve":f"{result['with_retry_reserve']:,}",
+                    "network":f"{result['estimated_download_mb']:.1f} MB","size":f"{result['width']:,} × {result['height']:,}"}
+            message=f"预计临时磁盘 {result['estimated_disk_mb']:.0f} MB · 分块处理内存约 {result['estimated_working_memory_mb']} MB；均为估算"
+        for key,value in self.stat_values.items():value.setText(values.get(key,"—"))
+        self.estimate_label.setText(message)
 
     def make_web(self,test):
         view=QWebEngineView();p=QWebEngineProfile(view);page=Page(p,view);view.setPage(page)
@@ -505,35 +434,40 @@ class Window(QMainWindow):
         view._bridge=bridge;view._channel=channel;view._profile=p;return view
 
     def build_accounts(self):
-        page=QScrollArea();page.setWidgetResizable(True);page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);content=QWidget();layout=QVBoxLayout(content);layout.setContentsMargins(0,0,8,0);layout.setSpacing(12)
-        intro=label("账户配置",False);intro.setStyleSheet("font-size:21px;font-weight:600;");layout.addWidget(intro)
-        hint=label("下载配置 Mapbox，预览平台按需配置。凭据使用当前 Windows 用户加密保存，任务使用启动时的配置。");hint.setProperty("muted",True);layout.addWidget(hint)
-        self.account_cards={};self.account_grid=cards=QGridLayout();cards.setHorizontalSpacing(16);cards.setVerticalSpacing(14);cards.setColumnStretch(0,1);cards.setColumnStretch(1,1);layout.addLayout(cards)
+        page=QScrollArea();page.setWidgetResizable(True);page.setFrameShape(QFrame.Shape.NoFrame);page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);content=QWidget();layout=QVBoxLayout(content);layout.setContentsMargins(4,4,12,4);layout.setSpacing(14)
+        intro=QVBoxLayout();intro.setSpacing(4);intro.addWidget(label("账户配置",False,"pageTitle"))
+        intro.addWidget(label("下载需要 Mapbox；预览平台按需配置。凭据使用当前 Windows 用户加密保存，任务使用启动时的配置。",muted=True));layout.addLayout(intro)
+        self.account_cards={};self.account_grid=cards=QGridLayout();cards.setHorizontalSpacing(14);cards.setVerticalSpacing(14);cards.setColumnStretch(0,1);cards.setColumnStretch(1,1);layout.addLayout(cards)
         for i,(platform,(title,fields,console,docs,guide)) in enumerate(GUIDES.items()):
-            card=QGroupBox(title);self.account_cards[platform]=card;body=QVBoxLayout(card);body.setSpacing(10);form=QGridLayout();form.setHorizontalSpacing(14);form.setColumnStretch(0,1);form.setColumnStretch(1,1)
+            card_frame,body=card(title,CAPTIONS[platform]);self.account_cards[platform]=card_frame;form=QGridLayout();form.setHorizontalSpacing(14);form.setVerticalSpacing(10);form.setColumnStretch(0,1);form.setColumnStretch(1,1)
             for key,title,is_secret in fields:
                 field=QLineEdit(self.settings.get(key,""));field.setMinimumWidth(0);field.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed);self.fields[key]=field;editor=field
                 if is_secret:
-                    field.setEchoMode(QLineEdit.EchoMode.Password);editor=QWidget();row=QHBoxLayout(editor);row.setContentsMargins(0,0,0,0);row.setSpacing(6);row.addWidget(field,1);show=QCheckBox("显示");show.toggled.connect(lambda on,w=field:w.setEchoMode(QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password));row.addWidget(show)
+                    field.setEchoMode(QLineEdit.EchoMode.Password);editor=QWidget();row=QHBoxLayout(editor);row.setContentsMargins(0,0,0,0);row.setSpacing(8);row.addWidget(field,1);show=QCheckBox("显示");show.toggled.connect(lambda on,w=field:w.setEchoMode(QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password));row.addWidget(show)
                 index=fields.index((key,title,is_secret));grid_field(form,index//2,index%2,title,editor)
                 field.textChanged.connect(lambda _,p=platform:self.dirty(p))
-            if len(fields)==1:form.addWidget(label("仅用于地图预览\n无需填写服务端 SK / SN"),0,1)
-            body.addLayout(form);state=label("已保存" if self.settings.get(fields[-1][0]) else "尚未配置");state.setProperty("muted",True);self.card_status[platform]=state;body.addWidget(state)
-            actions=QGridLayout();actions.setHorizontalSpacing(8);actions.setVerticalSpacing(6)
+            if len(fields)==1:form.addWidget(label("仅用于地图预览\n无需填写服务端 SK / SN",muted=True),0,1,Qt.AlignmentFlag.AlignBottom)
+            body.addLayout(form);state=label("已保存" if self.settings.get(fields[-1][0]) else "尚未配置",muted=True);self.card_status[platform]=state;body.addWidget(state)
+            actions=QGridLayout();actions.setHorizontalSpacing(8);actions.setVerticalSpacing(8)
             for col in range(3):actions.setColumnStretch(col,1)
-            actions.addWidget(button("保存配置",lambda _,p=platform:self.save_platform(p),True),0,0);actions.addWidget(button("测试 · 1 次请求" if platform=="mapbox" else "测试地图",lambda _,p=platform:self.test_platform(p)),0,1);actions.addWidget(button("删除配置",lambda _,p=platform:self.delete_platform(p)),0,2)
-            guidebox=label(guide+"\n\n资料核对：2026-10-07；申请和额度规则以当前控制台为准。");guidebox.setProperty("muted",True);guidebox.hide()
+            actions.addWidget(button("保存配置",lambda _,p=platform:self.save_platform(p),True),0,0);actions.addWidget(button("测试 · 1 次请求" if platform=="mapbox" else "测试地图",lambda _,p=platform:self.test_platform(p)),0,1);actions.addWidget(button("删除配置",lambda _,p=platform:self.delete_platform(p),danger=True),0,2)
+            guidebox=label(guide+"\n\n资料核对：2026-10-07；申请和额度规则以当前控制台为准。",role="callout");guidebox.hide()
             actions.addWidget(button("获取 Token" if platform=="mapbox" else "获取 Key / AK",lambda _,w=guidebox:w.setVisible(not w.isVisible())),1,0);actions.addWidget(button("平台控制台",lambda _,u=console:QDesktopServices.openUrl(QUrl(u))),1,1);actions.addWidget(button("官方教程",lambda _,u=docs:QDesktopServices.openUrl(QUrl(u))),1,2);body.addLayout(actions)
             if platform!="mapbox":
-                address=QLineEdit(self.server.url+"map.html");address.setReadOnly(True);address.setToolTip(self.server.url+"map.html");address.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed);ar=QHBoxLayout();ar.addWidget(address,1);ar.addWidget(button("复制地址",lambda:QApplication.clipboard().setText(self.server.url+"map.html")));body.addLayout(ar)
-            body.addWidget(guidebox);body.addStretch();cards.addWidget(card,i//2,i%2)
-        self.account_cards['quota']=quota=QGroupBox("Mapbox 额度与本机记录");qf=QVBoxLayout(quota);qgrid=QGridLayout();qgrid.setHorizontalSpacing(14);qgrid.setColumnStretch(0,1);qgrid.setColumnStretch(1,1)
+                body.addWidget(divider());body.addWidget(label("本机预览地址 · 用于域名 / Referer 白名单",False,muted=True))
+                address=QLineEdit(self.server.url+"map.html");address.setReadOnly(True);address.setToolTip(self.server.url+"map.html");address.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed);ar=QHBoxLayout();ar.setSpacing(8);ar.addWidget(address,1);ar.addWidget(button("复制地址",lambda:QApplication.clipboard().setText(self.server.url+"map.html")));body.addLayout(ar)
+            body.addWidget(guidebox);body.addStretch();cards.addWidget(card_frame,i//2,i%2)
+        quota,qf=card("Mapbox 额度与本机记录","手动录入控制台数据作为基准");self.account_cards['quota']=quota;qgrid=QGridLayout();qgrid.setHorizontalSpacing(14);qgrid.setVerticalSpacing(10);qgrid.setColumnStretch(0,1);qgrid.setColumnStretch(1,1)
         self.account_type=combo([("未知 / 未核对","unknown"),("标准账户","standard"),("试用账户","trial")]);self.account_type.setCurrentIndex(max(0,self.account_type.findData(self.settings.get("account_type","unknown"))))
         self.quota=integer(0,1000000000,int(self.settings.get("quota",0)));self.quota.setSpecialValueText("未知");self.usage=integer(0,1000000000,int(self.settings.get("usage",0)));self.cycle=QLineEdit(self.settings.get("cycle",""));self.cycle.setPlaceholderText("周期 / 控制台来源");self.cycle.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed)
         for i,(title,field) in enumerate((("账户类型",self.account_type),("本周期请求额度",self.quota),("控制台已用基准",self.usage),("周期 / 数据来源",self.cycle))):grid_field(qgrid,i//2,i%2,title,field)
-        qf.addLayout(qgrid);self.quota_status=label("");self.quota_status.setProperty("muted",True);qf.addWidget(self.quota_status);qf.addWidget(button("保存手动基准 / 更新时间",self.save_quota));note=label("未录入额度时显示未知。本机记录不代表全账户计费；公共 Token 不自动查询余额，具体额度以控制台为准。");note.setProperty("muted",True);qf.addWidget(note);cards.addWidget(quota,1,1)
-        terrain=QGroupBox("FABDEM 真实地形");tf=QHBoxLayout(terrain);note=label("无需 API Key · 原始约 30 米。0 米模式跳过地形网络；失败后可保留卫星成果再切换 0 米。");note.setProperty("muted",True);tf.addWidget(note,1);tf.addWidget(button("数据来源 / 许可",lambda:QDesktopServices.openUrl(QUrl("https://research-information.bris.ac.uk/en/datasets/fabdem-v1-2/"))));tf.addWidget(button("网络测试",self.test_terrain));layout.addWidget(terrain)
-        self.test_status=label("地图测试由您主动触发；高德 / 百度测试不消耗 Mapbox 下载请求。");self.test_status.setProperty("muted",True);layout.addWidget(self.test_status);self.test_view=self.make_web(True);self.test_view.setMinimumHeight(280);self.test_view.hide();layout.addWidget(self.test_view);layout.addStretch();page.setWidget(content);self.pages.addWidget(page)
+        qf.addLayout(qgrid);self.quota_status=label("",muted=True);qf.addWidget(self.quota_status);qf.addWidget(button("保存手动基准 / 更新时间",self.save_quota,True))
+        qf.addWidget(label("未录入额度时显示未知。本机记录不代表全账户计费；公共 Token 不自动查询余额，具体额度以控制台为准。",role="callout"));qf.addStretch();cards.addWidget(quota,1,1)
+        terrain,tb=card("FABDEM 真实地形","无需 API Key");tf=QHBoxLayout();tf.setSpacing(8)
+        tf.addWidget(label("原始分辨率约 30 米。0 米模式跳过地形网络；失败后可保留卫星成果再切换 0 米。",muted=True),1);tf.addWidget(button("数据来源 / 许可",lambda:QDesktopServices.openUrl(QUrl("https://research-information.bris.ac.uk/en/datasets/fabdem-v1-2/"))));tf.addWidget(button("网络测试",self.test_terrain));tb.addLayout(tf);layout.addWidget(terrain)
+        tester,vb=card("地图加载测试");self.test_status=label("地图测试由您主动触发；高德 / 百度测试不消耗 Mapbox 下载请求。",muted=True);vb.addWidget(self.test_status)
+        self.test_view=self.make_web(True);self.test_view.setMinimumHeight(300);self.test_view.hide();vb.addWidget(self.test_view);layout.addWidget(tester)
+        layout.addStretch();page.setWidget(content);self.pages.addWidget(page)
 
     def dirty(self,platform):
         fields=GUIDES[platform][1]
@@ -558,7 +492,8 @@ class Window(QMainWindow):
             if self.preview.currentData()==platform:self.reload_map()
         except Exception as exc:self.card_status[platform].setText("删除失败："+str(exc))
     def update_health(self):
-        self.health.setText("🟢 下载凭据已配置" if self.settings.get("mapbox_token") else "🔴 请配置 Mapbox Token")
+        ok=bool(self.settings.get("mapbox_token"))
+        self.health.setText("● 下载凭据已配置" if ok else "● 请配置 Mapbox Token");self.health.setProperty("state","ok" if ok else "warn");repolish(self.health)
         if self.plan:self.start.setEnabled(not self.running())
     def test_platform(self,platform):
         if any(self.fields[k].text().strip()!=self.settings.get(k,"") for k,_,_ in GUIDES[platform][1]):self.card_status[platform].setText("请先保存编辑，再测试已保存配置");return
@@ -625,9 +560,9 @@ class Window(QMainWindow):
         selection=json.loads(json.dumps(self.selection));res=self.resolution.value();zoom=self.zoom.value();reserve=self.reserve.value();generation=self.plan_generation;self.estimate_label.setText("正在检查网格、瓦片相交与有效缓存…")
         def complete(result,error):
             if generation!=self.plan_generation:return
-            if error:self.estimate_label.setText(str(error));return
+            if error:self.show_estimate(None,str(error));return
             self.plan=result;self.grid=make_grid(selection,res);self.render_selection()
-            self.estimate_label.setText(f"瓦片 {result['tiles']:,} · 有效缓存 {result['cache']:,}\n新增请求 {result['new_requests']:,} · 含预留 {result['with_retry_reserve']:,}\n预计网络 {result['estimated_download_mb']:.1f} MB\n预计临时磁盘 {result['estimated_disk_mb']:.0f} MB\n输出 {result['width']:,} × {result['height']:,}\n分块处理，内存估算约 {result['estimated_working_memory_mb']} MB；均为估算")
+            self.show_estimate(result)
             self.start.setEnabled(not self.running());self.refresh_quota()
         self.jobs.run(lambda:estimate(selection,res,zoom,reserve),complete)
     def choose_output(self):
