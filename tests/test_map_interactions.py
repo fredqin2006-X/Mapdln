@@ -57,12 +57,22 @@ def drag(w,start,end,button=Qt.MouseButton.LeftButton,modifiers=Qt.KeyboardModif
 
 
 def wheel(w,x,y,delta=120):
+    move(w,x,y)
     widget=target(w);p=QPoint(x,y);global_p=widget.mapToGlobal(p)
     event=QWheelEvent(QPointF(p),QPointF(global_p),QPoint(),QPoint(0,delta),Qt.MouseButton.NoButton,Qt.KeyboardModifier.NoModifier,Qt.ScrollPhase.NoScrollPhase,False)
     QApplication.sendEvent(widget,event);QTest.qWait(600)
 
 
 def tool(w,name):js(w,f"document.querySelector('[data-tool={name}]').click()")
+
+
+def key(w,value):
+    QTest.keyClick(target(w),value);QTest.qWait(150)
+
+
+def right_click(w,x,y):
+    QTest.mouseClick(target(w),Qt.MouseButton.RightButton,Qt.KeyboardModifier.NoModifier,QPoint(round(x),round(y)))
+    QTest.qWait(150)
 
 
 def rectangle(w):
@@ -111,6 +121,69 @@ def test_hover_previews_and_only_clicked_points_are_committed(editor,kind):
     wait_for(lambda:w.selection is not None)
     assert w.selection['shape']==kind and len(w.selection['points'])==3
     assert js(w,"document.getElementById('draft').getAttribute('d')") == ''
+
+
+@pytest.mark.parametrize('kind',['polygon','curve'])
+@pytest.mark.parametrize('enter_key',[Qt.Key.Key_Return,Qt.Key.Key_Enter])
+def test_enter_finishes_and_right_click_only_deletes_controls(editor,kind,enter_key):
+    w=editor;tool(w,kind)
+    for p in [(240,230),(420,230),(450,370),(250,390)]:click(w,*p)
+    move(w,210,320)
+    right_click(w,210,320)
+    assert w.selection is None and js(w,'mapDebugInfo().draftPoints')==4
+    right_click(w,250,390)
+    assert w.selection is None and js(w,'mapDebugInfo().draftPoints')==3
+    click(w,250,390)
+    key(w,enter_key)
+    wait_for(lambda:w.selection is not None)
+    assert w.selection['shape']==kind and len(w.selection['points'])==4
+    assert js(w,'mapDebugInfo().tool')=='pan'
+    assert js(w,"document.getElementById('draft').getAttribute('d')") == ''
+    # Once closed, right-click keeps its original control-point deletion role.
+    handle=js(w,"(()=>{const e=document.querySelector('.handle');return [+e.getAttribute('cx'),+e.getAttribute('cy')]})()")
+    right_click(w,*handle)
+    wait_for(lambda:len(w.selection['points'])==3)
+
+
+@pytest.mark.parametrize('enter_key',[Qt.Key.Key_Return,Qt.Key.Key_Enter])
+def test_finishing_requires_three_clicked_points(editor,enter_key):
+    w=editor;tool(w,'curve');click(w,240,230);click(w,420,230);move(w,450,370)
+    key(w,enter_key)
+    assert w.selection is None and js(w,'mapDebugInfo().draftPoints')==2
+    assert '至少三个' in js(w,"document.getElementById('hint').textContent")
+
+
+@pytest.mark.parametrize('kind',['rectangle','circle','polygon','curve'])
+def test_delete_clears_entire_shape_and_estimate(editor,kind):
+    w=editor
+    if kind in ['rectangle','circle']:
+        tool(w,kind);drag(w,(240,230),(440,380))
+    else:
+        tool(w,kind)
+        for p in [(240,230),(420,230),(450,370)]:click(w,*p)
+        key(w,Qt.Key.Key_Return)
+    wait_for(lambda:w.selection is not None)
+    key(w,Qt.Key.Key_Delete)
+    wait_for(lambda:w.selection is None)
+    assert w.grid is None and w.plan is None and not w.start.isEnabled()
+    assert js(w,"document.getElementById('outline').getAttribute('d')") == ''
+    assert js(w,"document.querySelectorAll('.handle,.rotate-handle').length")==0
+    assert '尚未选择区域' in w.area_label.text()
+
+
+def test_delete_during_drag_cannot_restore_stale_shape(editor):
+    w=editor;rectangle(w)
+    QTest.mousePress(target(w),Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier,QPoint(320,300))
+    move(w,350,330,Qt.MouseButton.LeftButton)
+    key(w,Qt.Key.Key_Delete)
+    QTest.mouseRelease(target(w),Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier,QPoint(350,330))
+    QTest.qWait(500)
+    assert w.selection is None
+    assert js(w,"document.getElementById('outline').getAttribute('d')")==''
+    tool(w,'polygon');click(w,240,230);click(w,420,230);move(w,450,370)
+    key(w,Qt.Key.Key_Delete)
+    assert js(w,'mapDebugInfo().draftPoints')==0
+    assert js(w,"document.getElementById('draft').getAttribute('d')")==''
 
 
 def test_rectangle_rotation_resize_and_move_preserve_orientation(editor):
@@ -172,6 +245,7 @@ def test_download_lock_covers_ui_bridge_coordinates_reload_and_navigation(editor
     assert js(w,"getComputedStyle(document.getElementById('handles')).display")=='none'
     for name in ['rectangle','circle','polygon','curve']:tool(w,name)
     js(w,"document.getElementById('clear').click()")
+    key(w,Qt.Key.Key_Delete);key(w,Qt.Key.Key_Return);right_click(w,320,300)
     drag(w,(320,300),(365,330))
     w.apply_coordinates();w.web._bridge.clearRegion()
     w.web._bridge.selectRegion(json.dumps({'shape':'circle','points':[[121.5,31.2]],'radius_m':20}))

@@ -75,7 +75,7 @@ function paint(){
  }
  paintDraft();
 }
-function setTool(t){if(selectionLocked)t='pan';tool=t;draft=[];hover=null;setPan(t==='pan');svg.classList.toggle('active',t!=='pan');outline.style.pointerEvents=t==='pan'?'visiblePainted':'none';handles.style.display=t==='pan'?'':'none';document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('on',b.dataset.tool===t));hint.textContent=(selectionLocked?'下载中：灰色选区已锁定；暂停期间保持锁定，取消或完成下载后解锁':t==='pan'?'拖动白点编辑、拖动选区移动；绿色 ↻ 手柄旋转矩形（Shift 对齐）；多边形/曲线双击加点、右键白点删除':t==='rectangle'||t==='circle'?'按住左键拖动创建选区；Esc 取消':'逐点点击；虚线预览当前位置的闭合形状；点击“完成”仅提交已点击的点；Esc 取消')+' · 滚轮缩放，按住中键拖动地图';paint();}
+function setTool(t){if(selectionLocked)t='pan';tool=t;draft=[];hover=null;setPan(t==='pan');svg.classList.toggle('active',t!=='pan');outline.style.pointerEvents=t==='pan'?'visiblePainted':'none';handles.style.display=t==='pan'?'':'none';document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('on',b.dataset.tool===t));hint.textContent=(selectionLocked?'下载中：灰色选区已锁定；暂停期间保持锁定，取消或完成下载后解锁':t==='pan'?'拖动白点编辑、拖动选区移动；绿色 ↻ 手柄旋转矩形（Shift 对齐）；Delete 删除图形；多边形/曲线双击加点、右键白点删除':t==='rectangle'||t==='circle'?'按住左键拖动创建选区；Delete 删除图形；Esc 取消':'逐点点击；虚线预览；Enter 或“完成”闭合已点击的点；右键白点删除控制点；Delete 删除图形；Esc 取消')+' · 滚轮缩放，按住中键拖动地图';paint();}
 function submit(points,kind,radius,details=null){if(!bridge||selectionLocked)return;const data={shape:kind,system,points};if(radius)data.radius_m=radius;if(kind==='rectangle')Object.assign(data,{angle_deg:rectangle?.angle_deg||0},details);bridge.selectRegion(JSON.stringify(data));}
 function flushSubmit(){if(submitFrame)cancelAnimationFrame(submitFrame);submitFrame=0;if(pendingSubmit){const args=pendingSubmit;pendingSubmit=null;submit(...args);}}
 function queueSubmit(...args){pendingSubmit=args;if(!submitFrame)submitFrame=requestAnimationFrame(flushSubmit);}
@@ -181,8 +181,25 @@ function cancelDrag(){const active=drag;drag=null;pendingSubmit=null;if(submitFr
 svg.addEventListener('pointercancel',cancelDrag);
 svg.addEventListener('lostpointercapture',()=>{if(drag)cancelDrag();});
 svg.addEventListener('pointerleave',()=>{if(!drag){hover=null;paintDraft();}});
-window.addEventListener('keydown',e=>{if(e.key==='Escape'){cancelDrag();setTool('pan');}});
+function finishDrawing(){
+ if(!map||selectionLocked||drag||navigationDrag||!['polygon','curve'].includes(tool))return;
+ if(draft.length<3){hint.textContent='需要至少三个已点击的控制点，才能按 Enter 完成闭合';return;}
+ submit(draft,tool);setTool('pan');
+}
+function clearSelection(){
+ if(selectionLocked)return;
+ cancelDrag();draft=[];hover=null;controls=[];boundary=[];rectangle=null;paint();if(bridge)bridge.clearRegion();
+}
+window.addEventListener('keydown',e=>{
+ if(!map||e.repeat||e.isComposing||e.ctrlKey||e.altKey||e.metaKey||e.target.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"])'))return;
+ if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancelDrag();setTool('pan');}
+ else if(!selectionLocked&&e.key==='Delete'){e.preventDefault();e.stopPropagation();clearSelection();}
+ else if(!selectionLocked&&e.key==='Enter'&&['polygon','curve'].includes(tool)){e.preventDefault();e.stopPropagation();finishDrawing();}
+},true);
 function mapSurface(target){return target instanceof Element&&!!target.closest('#overlay,#map')&&!target.closest('.leaflet-control,.amap-control,.BMap_stdMpCtrl');}
+// Right-click on the basemap (including locked selections) has no edit
+// target. Suppress the browser/SDK menu without completing a draft.
+window.addEventListener('contextmenu',e=>{if(mapSurface(e.target)&&!svg.contains(e.target)){e.preventDefault();e.stopPropagation();}},true);
 // The SVG is a sibling of the SDK container, so intercepted wheel events
 // never reach the map. AMap also rejects synthetic wheel input: use its API.
 svg.addEventListener('wheel',e=>{
@@ -217,7 +234,13 @@ mapHost.addEventListener('lostpointercapture',endNavigation);
 window.addEventListener('blur',()=>{endNavigation();cancelDrag();});
 window.addEventListener('auxclick',e=>{if(e.button===1&&mapSurface(e.target))e.preventDefault();},true);
 svg.addEventListener('contextmenu',e=>{
- e.preventDefault();if(selectionLocked)return;if(e.target.classList.contains('handle')&&['polygon','curve'].includes(shape)){
+ e.preventDefault();e.stopPropagation();if(selectionLocked)return;
+ if(['polygon','curve'].includes(tool)){
+  const p=eventPoint(e);let index=-1,distance=8;
+  draft.forEach((q,i)=>{const a=pixel(q),d=Math.hypot(a.x-p.x,a.y-p.y);if(d<=distance){index=i;distance=d;}});
+  if(index>=0){draft.splice(index,1);hover=null;paintDraft();}return;
+ }
+ if(e.target.classList.contains('handle')&&['polygon','curve'].includes(shape)){
   if(controls.length<=3){hint.textContent='至少需要三个控制点';return;}controls.splice(Number(e.target.dataset.index),1);submit(controls,shape);
  }
 });
@@ -230,8 +253,8 @@ svg.addEventListener('dblclick',e=>{
  }
 });
 document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
-document.getElementById('finish').onclick=()=>{if(selectionLocked)return;if(['polygon','curve'].includes(tool)&&draft.length>=3){submit(draft,tool);setTool('pan');}else hint.textContent='需要至少三个控制点';};
-document.getElementById('clear').onclick=()=>{if(selectionLocked)return;cancelDrag();draft=[];hover=null;controls=[];boundary=[];rectangle=null;paint();if(bridge)bridge.clearRegion();};
+document.getElementById('finish').onclick=finishDrawing;
+document.getElementById('clear').onclick=clearSelection;
 new QWebChannel(qt.webChannelTransport,channel=>{bridge=channel.objects.bridge;bridge.pageReady();});
 window.addEventListener('error',e=>{if(e.message)report('地图服务错误：'+e.message);});
 window.mapDebugInfo=()=>({provider,mapReady,hasMap:!!map,hasLeaflet:!!window.L,status:status.textContent,tool,selectionLocked,zoom:map?.getZoom(),draftPoints:draft.length,center:map?.getCenter()});

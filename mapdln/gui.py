@@ -88,6 +88,8 @@ class Bridge(QObject):
         w.plan_generation+=1
         w.debounce.stop()
         w.estimate_label.setText("绘制选区或输入 WGS84 中心坐标后预判额度")
+        w.area_label.setText("尚未选择区域。支持矩形、圆形、多边形和闭合插值曲线。")
+        w.web.page().runJavaScript("updateSelection({controls:[],boundary:[]})")
 
 
 def label(text,wrap=True):
