@@ -81,6 +81,37 @@ def test_invalid_and_large_regions():
     with pytest.raises(ValueError):make_grid({"shape":"curve","points":[[121,31],[121,31],[121.001,31.001]]})
 
 
+@pytest.mark.parametrize("angle",[0,30,90,-45,390])
+def test_rotated_rectangle_geometry_and_corner_resize(angle):
+    from pyproj import Transformer
+    grid=make_grid({**selection(),"angle_deg":angle})
+    corners=list(grid.polygon.exterior.coords)
+    a,b,c=corners[:3]
+    assert grid.polygon.area==pytest.approx(200*160)
+    assert np.dot(np.subtract(b,a),np.subtract(c,b))==pytest.approx(0,abs=1e-6)
+    inv=Transformer.from_crs(grid.crs,4326,always_xy=True)
+    # The same opposite-corner edit payload must not discard rotation.
+    edited=make_grid({"shape":"rectangle","points":[inv.transform(*corners[3]),inv.transform(*corners[1])],"angle_deg":angle})
+    assert edited.polygon.hausdorff_distance(grid.polygon)<1e-6
+    with pytest.raises(ValueError,match="旋转角度"):
+        make_grid({**selection(),"angle_deg":float('nan')})
+
+
+def test_rotated_rectangle_export_mask_and_metadata(tmp_path):
+    s={**selection(),"angle_deg":32}
+    grid=make_grid(s,2);seed(grid,17);out=tmp_path/'rotated'
+    with patch("requests.Session.get",side_effect=AssertionError("zero network expected")):
+        run_task({"selection":s,"resolution":2,"zoom":17,"elevation":"flat","output":str(out)},"pk.testing",lambda *a,**k:None)
+    from shapely.geometry import shape
+    geo=json.loads((out/'boundary.geojson').read_text())
+    assert shape(geo['features'][0]['geometry']).equals_exact(grid.geographic,1e-9)
+    with rasterio.open(out/'mask.png') as mask,rasterio.open(out/'satellite.png') as sat:
+        values=mask.read(1)
+        assert values[0,0]==values[-1,-1]==0
+        assert np.array_equal(values,sat.read(4))
+        assert np.count_nonzero(values)*4==pytest.approx(grid.polygon.area,rel=.02)
+
+
 def test_cache_integrity_age_and_quota(monkeypatch):
     grid=make_grid(selection(),1);ts=tiles_for(grid,17)
     seed(grid,17)

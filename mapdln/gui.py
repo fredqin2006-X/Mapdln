@@ -57,7 +57,7 @@ class Bridge(QObject):
     def pageReady(self):
         w=self.window;provider=w.test_provider if self.test else w.preview.currentData()
         view=w.test_view if self.test else w.web
-        view.page().runJavaScript("setTheme("+json.dumps(w.theme_dark)+");previewProvider("+json.dumps(provider)+")")
+        view.page().runJavaScript("setTheme("+json.dumps(w.theme_dark)+");setSelectionLocked("+json.dumps(False if self.test else w.selection_locked)+");previewProvider("+json.dumps(provider)+")")
     @Slot(str)
     def providerReady(self,system):
         if not self.test:
@@ -72,7 +72,7 @@ class Bridge(QObject):
         else:w.map_status.setText(text)
     @Slot(str)
     def selectRegion(self,text):
-        if self.test:return
+        if self.test or self.window.selection_locked:return
         w=self.window
         try:
             selection=json.loads(text);grid=make_grid(selection,w.resolution.value())
@@ -83,7 +83,7 @@ class Bridge(QObject):
             w.web.page().runJavaScript('updateSelection('+json.dumps({'shape':w.selection.get('shape','polygon'),'controls':w.selection.get('points',[]),'boundary':[]})+')')
     @Slot()
     def clearRegion(self):
-        if self.test:return
+        if self.test or self.window.selection_locked:return
         w=self.window;w.selection=None;w.grid=None;w.plan=None;w.start.setEnabled(False)
         w.plan_generation+=1
         w.debounce.stop()
@@ -172,7 +172,7 @@ class Window(QMainWindow):
         self.settings={};self.config_error=""
         try:self.settings=load()
         except Exception as exc:self.config_error="本机凭据无法解密，请重新保存："+str(exc)
-        self.selection=None;self.grid=None;self.plan=None;self.plan_generation=0;self.process=None;self.buffer=b"";self.task_state="idle"
+        self.selection=None;self.grid=None;self.plan=None;self.plan_generation=0;self.process=None;self.buffer=b"";self.task_state="idle";self.selection_locked=False
         self.terrain_failed=False;self.display_system="WGS84";self.test_provider="amap";self.test_success=False;self.fields={};self.card_status={}
         self.jobs=Jobs(self)
         assets=resource("web")
@@ -383,6 +383,7 @@ class Window(QMainWindow):
             remaining=max(0,q-used-recorded);required=self.plan.get("with_retry_reserve",0) if self.plan else 0
             self.balance_label.setText(f"参考剩余 {remaining:,} 次\n"+("预计超出已录入额度，请核对控制台" if required>remaining else "预估在已录入额度内")+"\n非实时全账户余额，其他设备用量未知")
     def apply_coordinates(self):
+        if self.selection_locked:return
         selection={"shape":self.input_shape.currentData(),"system":"WGS84","points":[[self.lon.value(),self.lat.value()]]}
         if selection["shape"]=="rectangle":selection.update(width_m=self.width_m.value(),height_m=self.height_m.value())
         else:selection["radius_m"]=self.radius_m.value()
@@ -394,16 +395,23 @@ class Window(QMainWindow):
         from pyproj import Transformer
         inv=Transformer.from_crs(self.grid.crs,4326,always_xy=True);controls=self.grid.controls
         if self.selection["shape"]=="rectangle":
-            x0,y0,x1,y1=self.grid.polygon.bounds;controls=[inv.transform(x0,y0),inv.transform(x1,y1)]
+            corners=list(self.grid.polygon.exterior.coords)
+            controls=[inv.transform(*corners[3]),inv.transform(*corners[1])]
         elif self.selection["shape"]=="circle":
             x0,y0,x1,y1=self.grid.polygon.bounds;controls=[inv.transform((x0+x1)/2,(y0+y1)/2),inv.transform(x1,(y0+y1)/2)]
         data={"shape":self.selection["shape"],"controls":[from_wgs(p,self.display_system) for p in controls],"boundary":[from_wgs(p,self.display_system) for p in self.grid.geographic.exterior.coords]}
+        if self.selection['shape']=='rectangle':
+            import math
+            center=self.grid.polygon.centroid
+            data['rectangle']={'center':from_wgs(inv.transform(center.x,center.y),self.display_system),
+                               'width_m':math.dist(corners[0],corners[3]),'height_m':math.dist(corners[0],corners[1]),
+                               'angle_deg':float(self.selection.get('angle_deg',0))%360}
         if self.selection['shape']=='circle':data['radius_m']=(self.grid.polygon.bounds[2]-self.grid.polygon.bounds[0])/2
         self.web.page().runJavaScript("updateSelection("+json.dumps(data)+")");self.area_label.setText(f"面积 {self.grid.polygon.area/10000:.3f} 公顷 · {self.grid.width:,} × {self.grid.height:,} 像素 · {self.grid.crs.to_string()} · {self.grid.resolution:g} m/px")
     def reload_map(self,*args):
         if hasattr(self,"web"):self.web.load(QUrl(self.server.url+"map.html"))
     def replan(self,*args):
-        if not hasattr(self,"debounce"):return
+        if not hasattr(self,"debounce") or self.selection_locked:return
         self.plan=None;self.start.setEnabled(False);self.plan_generation+=1
         if self.selection:self.debounce.start()
     def calculate(self):
@@ -423,6 +431,11 @@ class Window(QMainWindow):
         return {"proxy":self.proxy.text().strip(),"connect_timeout":self.connect_timeout.value(),"read_timeout":self.read_timeout.value(),"concurrency":self.concurrency.value(),"retries":self.retries.value(),"bit_depth":self.bits.currentData(),"smooth":self.smooth.value()}
     def running(self):
         return self.process is not None and self.process.state()!=QProcess.ProcessState.NotRunning
+    def set_selection_locked(self,locked):
+        self.selection_locked=bool(locked);self.coordinate_card.setEnabled(not locked)
+        self.web.page().runJavaScript("setSelectionLocked("+json.dumps(self.selection_locked)+")")
+        if locked:
+            self.plan_generation+=1;self.debounce.stop()
     def start_task(self,override=None):
         if self.running():return
         if not self.settings.get("mapbox_token"):self.navigate(1);self.card_status["mapbox"].setText("开始下载需要保存公共 Token；选区和参数已保留");return
@@ -431,8 +444,10 @@ class Window(QMainWindow):
             name=self.name.text().strip()
             if not name or any(c in name for c in '<>:"/\\|?*') or name.endswith((" ",".")) or name in (".",".."):self.stage.setText("任务名包含 Windows 路径特殊字符");return
             task={"selection":json.loads(json.dumps(self.selection)),"resolution":self.resolution.value(),"zoom":self.zoom.value(),"elevation":self.elevation.currentData(),"output":str(Path(self.output.text())/name),"task_id":uuid.uuid4().hex,"budget":self.budget.value(),"options":self.options()}
-        else:task=override
-        self.active_task=task;self.terrain_failed=False;self.flat_retry.hide();self.buffer=b"";self.task_state="running";self.logs.appendPlainText("启动独立后台任务；Token 通过 stdin 传递，代理不写入任务元数据。")
+        else:
+            task=override
+            self.selection=json.loads(json.dumps(task['selection']));self.grid=make_grid(self.selection,task['resolution']);self.render_selection()
+        self.active_task=task;self.terrain_failed=False;self.flat_retry.hide();self.buffer=b"";self.task_state="running";self.set_selection_locked(True);self.logs.appendPlainText("启动独立后台任务；Token 通过 stdin 传递，代理不写入任务元数据。")
         self.process=QProcess(self);self.process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels);self.process.readyReadStandardOutput.connect(self.read_worker);self.process.readyReadStandardError.connect(self.read_errors);self.process.finished.connect(self.worker_finished);self.process.errorOccurred.connect(self.worker_error)
         if getattr(sys,"frozen",False):program=sys.executable;args=["--worker"]
         else:program=sys.executable;args=[str(Path(__file__).resolve().parent.parent/"main.py"),"--worker"]
@@ -463,10 +478,12 @@ class Window(QMainWindow):
         self.read_worker();self.read_errors()
         if code!=0 and self.task_state not in ("failed","cancelled"):self.task_state="failed";self.stage.setText(f"任务异常退出（{code}），请查看日志")
         for b in (self.pause,self.resume,self.cancel):b.setEnabled(False)
-        self.start.setEnabled(bool(self.plan));self.flat_retry.setVisible(self.terrain_failed);self.refresh_quota();self.replan()
+        self.set_selection_locked(False);self.start.setEnabled(bool(self.plan));self.flat_retry.setVisible(self.terrain_failed);self.refresh_quota();self.replan()
     def worker_error(self,error):
         self.append_log("后台进程错误："+self.process.errorString())
-        if self.process.state()==QProcess.ProcessState.NotRunning:self.stage.setText("无法启动后台任务，请查看日志");self.start.setEnabled(bool(self.plan))
+        if self.process.state()==QProcess.ProcessState.NotRunning:
+            self.set_selection_locked(False);self.stage.setText("无法启动后台任务，请查看日志");self.start.setEnabled(bool(self.plan))
+            for b in (self.pause,self.resume,self.cancel):b.setEnabled(False)
     def read_errors(self):
         text=bytes(self.process.readAllStandardError()).decode("utf-8",errors="replace").strip()
         if text:self.append_log(text)

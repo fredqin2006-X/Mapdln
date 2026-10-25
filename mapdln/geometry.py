@@ -6,6 +6,7 @@ import mercantile
 from pyproj import CRS, Transformer, Proj
 from rasterio.transform import from_origin
 from shapely.geometry import Polygon, box, mapping
+from shapely.affinity import rotate
 from shapely.ops import transform
 from shapely.validation import explain_validity
 
@@ -158,6 +159,10 @@ def make_grid(selection, resolution=1):
     xy = [fwd.transform(*p) for p in points]
     kind = selection["shape"]
     if kind == "rectangle":
+        angle = float(selection.get("angle_deg", 0))
+        if not math.isfinite(angle):
+            raise ValueError("矩形旋转角度必须为有限数值")
+        angle %= 360
         if selection.get("width_m") and selection.get("height_m"):
             w, h = float(selection["width_m"]), float(selection["height_m"])
             if not math.isfinite(w+h) or min(w, h) <= 0:
@@ -169,9 +174,18 @@ def make_grid(selection, resolution=1):
                 poly = box(x-w/2, y-h/2, x+w/2, y+h/2)
         elif len(xy) >= 2:
             a, b = xy[0], xy[1]
+            # Opposite corners are expressed in the rotated rectangle's axes.
+            # This keeps its orientation when resizing either corner.
+            center = ((a[0]+b[0])/2, (a[1]+b[1])/2)
+            c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+            def local(p):
+                dx, dy = p[0]-center[0], p[1]-center[1]
+                return center[0]+c*dx+s*dy, center[1]-s*dx+c*dy
+            a, b = local(a), local(b)
             poly = box(min(a[0],b[0]), min(a[1],b[1]), max(a[0],b[0]), max(a[1],b[1]))
         else:
             raise ValueError("矩形需要两个角点或中心及宽高")
+        poly = rotate(poly, angle, origin="center")
     elif kind == "circle":
         r = float(selection.get("radius_m") or (math.dist(xy[0], xy[1]) if len(xy)>1 else 0))
         if not math.isfinite(r) or r <= 0:
