@@ -1,6 +1,6 @@
 # Mapdln 维护文档
 
-适用版本：2.4.0 本地构建；更新日期：2026-10-25。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
+适用版本：2.4.0 Windows 发布版；更新日期：2026-10-25。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
 
 ## 1. 源码入口与职责
 
@@ -178,7 +178,7 @@ git status --short
 
 ## 8. 2.4.0 本地构建记录与回退
 
-界面重设计提交为 `a716f99`（main，2026-10-25），提交后更新本节；未推送或发布 GitHub Release。仅改动 `gui.py`、`map.html`、`map.js` 的布局与样式，下载、绘图、快捷键和锁定逻辑不变。`tools/build.ps1` 完整回归 61 项通过，冻结包检查与冻结后台缓存导出通过；EXE 内 `map.html`、`map.js` 已逐字节核对与源码一致。构建日志位于 `test-output/build-rescue/build-2.4.0.log`，界面截图位于 `test-output/ui-shots/`。
+界面重设计提交为 `a716f99`（main，2026-10-25），提交后更新本节；当时仅完成本地构建，后续公开发行见第 10 节。仅改动 `gui.py`、`map.html`、`map.js` 的布局与样式，下载、绘图、快捷键和锁定逻辑不变。`tools/build.ps1` 完整回归 61 项通过，冻结包检查与冻结后台缓存导出通过；EXE 内 `map.html`、`map.js` 已逐字节核对与源码一致。构建日志位于 `test-output/build-rescue/build-2.4.0.log`，界面截图位于 `test-output/ui-shots/`。
 
 根目录与 dist 的程序均为 183,775,522 字节（175.26 MiB），SHA-256 为 `d2af40fd13634ebee8cc02265c1003c6cb3e4839f2c2005293badcffd65a2611`。成品界面的人工操作、在线底图和真实下载仍需独立验收。
 
@@ -203,3 +203,15 @@ Copy-Item -LiteralPath test-output\build-backup\mapdln-97a94e466872.exe -Destina
 ```
 
 该备份为 308,192,823 字节。二进制回退不改变源码或 dist；恢复新版本可从 dist 复制，或重新运行正式构建脚本。源码回退按第 6 节使用 `git revert`，不要覆盖未提交工作。旧临时 spec 及草稿说明另存于忽略目录 `test-output/build-rescue/`；这些备份、测试数据和日志不进入公开仓库。
+
+## 10. 2.4.0 GitHub 发行记录与复核
+
+2026-10-25 用户授权推送源码并发布 Release。发布准备提交为 `600ed0a`，在提交后补充本维护记录。该提交合并远端 `a6a9dbc` 的 README 致谢及项目用途，保留本地 2.2.0、2.3.0、2.4.0 六笔提交，不重写远端历史。发布标签为 `v2.4.0`，源码分支为 `main`；仅变更公开文档，沿用第 8 节已经构建的 EXE。
+
+发布前重新执行 `python -m pytest -q`，61 项通过（37.96 秒）；重新执行 `tools/verify_build.py mapdln.exe`，冻结包资源和隔离中文目录下 51 × 51、2 米缓存圆形导出通过，网络请求数 0。应用七个冻结模块、主入口及十项页面/图标资源与当前源码一致；根目录与 dist 程序哈希一致。没有将此结果扩展为在线底图、真实下载或另一台 Windows 电脑验收。
+
+发布位置：[Mapdln v2.4.0](https://github.com/fredqin2006-X/Mapdln/releases/tag/v2.4.0)。Windows 附件仅为 `Mapdln-2.4.0-Windows-x64.zip`，其中包括 EXE、README、维护文档、发行说明、变更记录、验收记录、体积记录、LICENSE 与第三方说明；不单独上传 EXE、手工源码包或校验文件。ZIP 的 SHA-256 写在 GitHub 发行说明末尾，源码使用 GitHub 自动生成的 Source code ZIP / tar.gz。
+
+本轮本机复核记录保存在忽略目录 `test-output/release-2.4.0-build-verification.json` 与 `test-output/release-2.4.0-audit.json`。公开前检查待推送提交历史、暂存区、冻结应用代码/资源和 ZIP，排除本机真实账户值与私有文件。临时依赖分析脚本不进入本次提交；原文件留在工作区。
+
+发行顺序：显式提交源码和文档，更新本维护记录并提交，按第 6 节白名单打包并解压验证，扫描最终历史与 ZIP，再推送 main 及同一提交的 `v2.4.0` 标签；创建草稿 Release、上传唯一 ZIP，核对远端字节数和 SHA-256 后发布。最后复核 main/tag 一致、Latest 指向及匿名下载，并检查 GitHub 自动源码归档的文件清单。未完成上传或哈希不符时保持草稿，不将失败上传记作已发布。
