@@ -1,6 +1,6 @@
 # Mapdln 维护文档
 
-适用版本：2.5.0 Windows 本地构建；更新日期：2026-10-28。当前公开发行仍为 2.4.0。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
+适用版本：2.6.0 Windows 本地构建；更新日期：2026-10-28。当前公开发行仍为 2.4.0。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
 
 ## 1. 源码入口与职责
 
@@ -31,9 +31,9 @@
 
 GUI 和 CLI 共用同一几何及下载引擎。“导出影像”决定成果来源，“预览底图”可跟随影像或单独选择定位底图；改变预览不得改变任务来源或已选区域。工作台把影像清晰度默认设为自动，手动层级位于高级设置；本地 DEM 控件按需展开。仅高程自动使用离线坐标预览，切回影像时恢复之前的底图选择。
 
-图源扩展统一修改 `sources.py`，不要在 GUI、预览和引擎分别拼接地址。首版只接受标准 EPSG:3857 全球矩阵，256/512 像素 JPEG/PNG，层级 0–24（供应商自己的范围继续限制，例如 Mapbox 最大 22）。WMTS 必须校验比例、原点、尺寸与范围，并保留服务的矩阵 ID；不能仅凭 CRS 字符串认作 XYZ。
+图源扩展统一修改 `sources.py`，不要在 GUI、预览和引擎分别拼接地址。接受标准 Web Mercator 全球矩阵，256/512 像素 JPEG/PNG/WebP，层级 0–24（供应商自己的范围继续限制，例如 Mapbox 最大 22，腾讯/吉林预设最大 18）。WMTS 必须校验比例、原点、尺寸与范围，并保留服务的矩阵 ID；不能仅凭 CRS 字符串认作 XYZ。GCJ02 影像由 `tiles_for(grid,z,datum)` 在源坐标中规划，按目标像素反向采样；中间源影像不能冒充标准 EPSG:3857，最终成果与 DEM 共用 UTM 网格。
 
-任务使用 `source`、`imagery`、`elevation` 与可选 `dem` 快照；凭据通过 worker stdin 的 `token` 字段传递，可为结构化字典。自定义 URL 的常见凭据参数与所有请求头使用独立 DPAPI 凭据库；导出元数据通过允许字段生成，不写 URL、Token、请求头或完整 DEM 路径。不同来源/凭据的缓存指纹不同；只有标准 Mapbox 继续复用旧缓存。
+任务使用 `source`、`imagery`、`elevation` 与可选 `dem` 快照；凭据通过 worker stdin 的 `token` 字段传递，可为结构化字典。自定义 URL 的常见凭据参数与所有请求头使用独立 DPAPI 凭据库；导出元数据通过允许字段生成，不写 URL、Token、请求头或完整 DEM 路径。不同来源/凭据的缓存指纹不同；只有标准 Mapbox 继续复用旧缓存。腾讯 / 吉林可编辑定义位于 `provider_sources`，凭据仍位于加密 `source_credentials`；吉林 TK 对应 `token`，MK 对应 `credential_1`，完整 URL 的提取与参数顺序无关。腾讯先翻转 TMS 行号，再计算 `{x16}/{y16}`；吉林默认 `sch=wmts` 使用左上原点，移除此参数时必须核对服务行号约定。
 
 本地 DEM 使用 `snapshot_dem → validate_dem → elevation_export`；源 mask 和有限数值决定有效像元，合法 0 / -9999 不作为缺失。单位换算为 `(raw × scale + offset) × unit_factor`，目标 NoData 为 NaN。预检和导出共用 `aligned_dem_data`，不要重复实现；主文件和伴随文件变化、缺失单位、覆盖空洞及输入输出同文件均应拒绝。真实地形/平坦模式保留原 NoData 行为。
 
@@ -238,3 +238,15 @@ Copy-Item -LiteralPath test-output\build-backup\mapdln-97a94e466872.exe -Destina
 根目录与 dist 的 EXE 均为 **184,351,373 字节（175.81 MiB）**，SHA-256 为 `c500e7f6ee2eed95d66bbf62f2dcc7afa2b27951f3eb487ca0ae95b84f3cd084`。旧 2.4.0 根目录程序已经备份到 `test-output/build-backup/mapdln-d2af40fd1363.exe`。日志和报告位于 `test-output/build-2.5.0.log`、`test-output/build-verification.json`、`test-output/artifact-audit-2.5.0.json`；界面截图位于 `test-output/source-ui-250/`。
 
 回退源码使用 `git revert 91cf93f` 并重新构建；临时恢复旧入口前先退出程序，再复制上述备份到根目录 `mapdln.exe`。回退为 2.4.0 后新增图源及本地 DEM 配置不再可用，应先保留用户配置副本；不要让旧版保存操作覆盖新配置。
+
+## 12. 2.6.0 腾讯兼容 / 吉林一号接入与回退
+
+2026-10-28 完成实现并在本地 `main` 提交 `904b1e0`，随后更新本维护文档。增加腾讯卫星兼容适配、吉林一号 TK / MK 表单与服务配置、WebP 支持、GCJ-02 预览及影像反向采样。没有推送或创建 GitHub Release。
+
+正式构建完整回归 **178 项通过（68.88 秒）**；五种冻结后台导出全部通过，包含 Tencent GCJ-02 与 Jilin WebP / 凭据隔离。独立公式验证渐变影像的地理位置、半透明边缘、z24 与转换边界；实际 Qt / Leaflet 切换预览保留原选区。浅色 / 深色以及最小管理窗口截图检查通过，成品 GUI 工作台和图源管理可实际打开。十个冻结应用模块及地图资源与源码一致，公开输入及冻结应用代码真实凭据扫描通过。
+
+腾讯研究请求及程序内置适配器分别成功请求 1 张 z17 JPEG；后者复用缓存实际导出 40×40 米区域，影像 / DEM / 掩膜同网格。该兼容接口没有官方批量下载 API 稳定性承诺，未验收全球覆盖、全部层级、长期稳定或测量级定位。用户确认没有吉林 TK / MK，因此只完成协议、凭据、localhost WebP、预览和冻结导出的离线验证，真实服务联调待用户配置后进行。不得把这些结果记成吉林真实账户验证通过。
+
+根目录与 dist 的 EXE 均为 **184,363,456 字节（175.82 MiB）**，SHA-256 为 `fcada926545b6f3412a579c7e4bc9d6622a8c7653165a08a594fafd572b8c015`。2.5.0 程序备份在 `test-output/build-backup/mapdln-c500e7f6ee2e.exe`。报告位于 `test-output/build-2.6.0.log`、`test-output/build-verification.json`、`test-output/artifact-audit-2.6.0.json`、`test-output/tencent-live-export-260/result.json`；界面截图位于 `test-output/provider-ui-260/`。
+
+回退源码可对 `904b1e0` 执行 `git revert` 后重新构建；临时回退入口应先关闭程序，再复制上述 2.5.0 备份到根目录。回退前保留用户配置副本：2.5.0 不认识内置 `tencent` / `jilin` 及 GCJ02 栅格 / WebP，新版本的 `source_credentials` 不应被旧版保存操作丢弃。
