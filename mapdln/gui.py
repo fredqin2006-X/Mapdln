@@ -1,11 +1,11 @@
-"""Desktop workbench, accounts and responsive background process control."""
+"""Desktop workbench, source / preview configuration and responsive background process control."""
 import concurrent.futures
 import json
 import sys
 import uuid
 from pathlib import Path
 from string import Template
-from datetime import datetime, timezone
+from datetime import datetime
 from PySide6.QtCore import QObject,Signal,Slot,QUrl,QProcess,QTimer,Qt,QStandardPaths
 from PySide6.QtGui import QDesktopServices,QFont,QIcon,QPixmap,QPalette,QColor
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QLabel,
@@ -19,11 +19,12 @@ from PySide6.QtNetwork import QNetworkProxy
 from . import __version__
 from .config import load,save,redact,SECRETS,Ledger
 from .geometry import make_grid,from_wgs
-from .engine import estimate,Control,fetch_tile,FABDEM_BASE,session_for
+from .engine import estimate,FABDEM_BASE,session_for
 from .server import PreviewServer
 from .sources import get_source,list_sources,credentials_for,secret_values,build_request
 from .local_dem import inspect_dem,snapshot_dem
 from .widgets import FlatCombo
+from .source_dialog import SourcesPanel
 
 
 class Jobs(QObject):
@@ -177,16 +178,13 @@ def form_row(form,title,field):
 
 
 GUIDES={
- "mapbox":("Mapbox 卫星下载",[("mapbox_id","Mapbox ID",False),("mapbox_token","Access Token",True)],
-  "https://console.mapbox.com/account/access-tokens/","https://docs.mapbox.com/accounts/guides/tokens/",
-  "① 打开控制台，注册或登录。\n② 复制可用的 pk. 公共 Token；试用账户可用默认 Token，不要求新建。\n③ 填入 Token、用户名（ID 只用于标识，不需要密码）。\n④ 保存并测试：实际发起 1 次瓦片请求，计入本机记录。\n\n401：Token 无效/已删除。403：检查账户状态、URL 限制。桌面请求不带网页 Referer，不建议伪造 Referer。超时属于网络问题。"),
  "amap":("高德地图预览",[("amap_key","Web 端 JS API Key",True),("amap_secret","securityJsCode 安全密钥",True)],
   "https://console.amap.com/","https://lbs.amap.com/api/javascript-api-v2/guide/abc/jscode",
   "① 打开控制台，按要求注册/认证。\n② 创建或选择应用，添加 Web 端（JS API）Key。\n③ 填入同一项配置的 Key、安全密钥并保存。\n④ 在测试区域实际加载地图，使用高德额度，不计入 Mapbox。\n\n勿用 Web 服务/Android/iOS Key。若有域名限制，复制实际本机地址，按控制台要求填写；端口被占用时地址会变化。安全密钥由仅供本机页面的受限转发服务注入。失败时检查 Key 类型、密钥配对、地址限制、授权及网络。"),
  "baidu":("百度地图预览",[("baidu_ak","浏览器端 AK",True)],
   "https://lbsyun.baidu.com/apiconsole/key","https://lbsyun.baidu.com/docs/jsapi?title=193",
   "① 打开控制台，按要求注册/认证。\n② 创建浏览器端应用，启用 JavaScript API 服务。\n③ 按实际本机地址设置 Referer 白名单，不默认使用无限制通配符。\n④ 复制浏览器端 AK，保存后在测试区域实际加载地图。\n\n不填写服务端 AK、SK 或 SN。失败时检查 AK 类型、服务权限、Referer 白名单、授权及网络。使用百度额度，不计入 Mapbox。")}
-CAPTIONS={"mapbox":"卫星影像下载 · 开始下载前必需","amap":"地图预览 · 国内默认推荐","baidu":"地图预览 · 国内备选"}
+CAPTIONS={"amap":"国内默认推荐 · GCJ-02 坐标","baidu":"国内备选 · BD-09 坐标"}
 THEMES={
  "light":dict(bg="#F3F5F7",surface="#FFFFFF",field="#F7F9FA",sunken="#EFF2F5",ink="#17212B",muted="#66727F",line="#E1E6EB",strong="#C6CED6",
   accent="#0E9F8C",accent_hover="#0B8676",accent_press="#08705F",on_accent="#FFFFFF",tint="#E3F5F1",danger="#D14343",danger_tint="#FDECEC",
@@ -236,6 +234,11 @@ QComboBox QAbstractItemView { background: $surface; border: 1px solid $line; bor
 QComboBox QAbstractItemView::item { min-height: 32px; padding: 4px 10px; border-radius: 6px; margin: 1px 0; }
 QComboBox QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:hover { background: $tint; color: $accent; }
 QFrame#comboPopup { border: 0; background: $surface; }
+QListWidget#sourceList { background: transparent; border: 0; outline: 0; }
+QListWidget#sourceList::item { border-radius: 8px; margin: 1px 0; }
+QListWidget#sourceList::item:hover { background: $sunken; }
+QListWidget#sourceList::item:selected { background: $tint; }
+QLabel[pending="true"] { color: $warn; }
 
 QPushButton { background: $surface; border: 1px solid $line; border-radius: 8px; padding: 6px 14px; min-height: 20px; }
 QPushButton:hover { border-color: $accent; color: $accent; }
@@ -300,14 +303,14 @@ class Window(QMainWindow):
         title.addLayout(brand);title.addWidget(label("卫星影像与地形数据下载工作台",False,muted=True))
         header.addLayout(title,1)
         nav=QFrame();nav.setObjectName("segment");nav_group=QHBoxLayout(nav);nav_group.setContentsMargins(3,3,3,3);nav_group.setSpacing(2)
-        self.work_nav=button("下载工作台",lambda:self.navigate(0),nav=True);self.account_nav=button("账户配置",lambda:self.navigate(1),nav=True)
-        for b in (self.work_nav,self.account_nav):b.setCheckable(True);nav_group.addWidget(b)
+        self.nav_buttons=[button(text,lambda _,i=i:self.navigate(i),nav=True) for i,text in enumerate(("下载工作台","图源管理","地图预览"))]
+        for b in self.nav_buttons:b.setCheckable(True);nav_group.addWidget(b)
         header.addWidget(nav)
         right=QHBoxLayout();right.addStretch();self.health=label("● 未配置下载凭据",False);self.health.setObjectName("health");right.addWidget(self.health);header.addLayout(right,1)
         layout.addWidget(top)
-        self.pages=QStackedWidget();layout.addWidget(self.pages,1);self.build_workbench();self.build_accounts()
+        self.pages=QStackedWidget();layout.addWidget(self.pages,1);self.build_workbench();self.build_sources();self.build_previews()
         self.debounce=QTimer(self);self.debounce.setSingleShot(True);self.debounce.setInterval(350);self.debounce.timeout.connect(self.calculate)
-        self.ledger_timer=QTimer(self);self.ledger_timer.timeout.connect(self.refresh_quota);self.ledger_timer.start(15000)
+        self.ledger_timer=QTimer(self);self.ledger_timer.timeout.connect(self.refresh_usage);self.ledger_timer.start(15000)
         self.update_health();self.navigate(0);self.apply_theme();QApplication.styleHints().colorSchemeChanged.connect(lambda _:self.apply_theme())
         self.web.load(QUrl(self.server.url+"map.html"))
         if self.config_error:self.map_status.setText(self.config_error)
@@ -324,9 +327,10 @@ class Window(QMainWindow):
         for view in (self.web,self.test_view):view.page().runJavaScript('window.setTheme&&setTheme('+json.dumps(dark)+')')
 
     def navigate(self,index):
+        if index==1:self.sources_panel.sync(self.settings,self.options())
         self.pages.setCurrentIndex(index)
-        for w,on in ((self.work_nav,index==0),(self.account_nav,index==1)):w.setChecked(on)
-        if index==1:self.refresh_quota()
+        for i,b in enumerate(self.nav_buttons):b.setChecked(i==index)
+        if index==0:self.refresh_usage()
 
     def build_workbench(self):
         work=QWidget();outer=QVBoxLayout(work);outer.setContentsMargins(0,0,0,0);split=QSplitter(Qt.Orientation.Horizontal);split.setHandleWidth(8);split.setChildrenCollapsible(False)
@@ -358,10 +362,10 @@ class Window(QMainWindow):
             chip=button(f"{n:g} m",lambda _,v=n:(self.resolution.setValue(v),sync_chips(v)),chip=True);chip.setCheckable(True);self.resolution_chips[n]=chip;presets.addWidget(chip)
         self.resolution.valueChanged.connect(sync_chips);sync_chips(self.resolution.value())
         form_row(form,"",presets);self.zoom=integer(0,24,17);self.auto_zoom=QCheckBox("按输出分辨率自动选择");self.auto_zoom.setToolTip('关闭后可在高级设置中调整手动瓦片层级');self.auto_zoom.setChecked(True);form_row(form,"影像清晰度",self.auto_zoom);self.zoom.setEnabled(False)
-        body.addWidget(button("管理图源 / 配置密钥",self.manage_sources))
+        body.addWidget(button("配置图源 / 密钥",self.open_sources))
         side.addWidget(group)
-        # 额度预判
-        budgetgroup,bf=card("下载前额度预判","按实际选区与瓦片相交计算，并扣除有效缓存")
+        # 请求预判
+        budgetgroup,bf=card("下载前请求预判","按实际选区与瓦片相交计算，并扣除有效缓存")
         self.estimate_stats=QWidget();sg=QGridLayout(self.estimate_stats);sg.setContentsMargins(0,0,0,0);sg.setSpacing(8);self.stat_values={}
         for i,(key,caption) in enumerate((("tiles","所需瓦片"),("cache","有效缓存"),("new","新增请求"),("reserve","含重试预留"),("network","预计网络"),("size","输出像素"))):
             tile=QFrame();tile.setObjectName("stat");tv=QVBoxLayout(tile);tv.setContentsMargins(10,7,10,8);tv.setSpacing(1)
@@ -369,11 +373,10 @@ class Window(QMainWindow):
         sg.setColumnStretch(0,1);sg.setColumnStretch(1,1);bf.addWidget(self.estimate_stats)
         self.estimate_label=label("绘制选区或输入 WGS84 中心坐标后预判额度",muted=True);bf.addWidget(self.estimate_label)
         bf.addWidget(divider())
-        self.balance_label=label("账户剩余额度未知");bf.addWidget(self.balance_label)
-        self.preview_usage=label("高德 / 百度预览不产生 Mapbox 请求",muted=True);bf.addWidget(self.preview_usage)
+        self.preview_usage=label("",muted=True);bf.addWidget(self.preview_usage)
         limits=form_layout();self.reserve=integer(0,100,10);self.reserve.setSuffix(" %");form_row(limits,"重试预留",self.reserve)
         self.budget=integer(0,1000000,0);self.budget.setSpecialValueText("不限 · 仅本机预算");form_row(limits,"任务请求预算",self.budget);bf.addLayout(limits)
-        bf.addWidget(button("重新检查缓存 / 额度",self.replan))
+        bf.addWidget(button("重新检查缓存",self.replan))
         side.addWidget(budgetgroup)
         # 高级设置
         self.advanced_toggle=button("▸  "+ADVANCED_TITLE,lambda:None);self.advanced_toggle.setObjectName("disclosure");self.advanced_toggle.setCheckable(True);side.addWidget(self.advanced_toggle)
@@ -443,7 +446,7 @@ class Window(QMainWindow):
         except Exception as exc:self.append_log('保存偏好失败：'+str(exc))
 
     def preview_changed(self):
-        self.persist_preferences();self.reload_map();self.refresh_quota()
+        self.persist_preferences();self.reload_map();self.refresh_usage()
 
     def source_changed(self):
         imagery=bool(self.export_content.currentData());self.imagery_source.setEnabled(imagery);self.auto_zoom.setEnabled(imagery);self.zoom.setEnabled(imagery and not self.auto_zoom.isChecked())
@@ -455,22 +458,24 @@ class Window(QMainWindow):
             self.server.set_preview_enabled(True);self.reload_map()
         self.preview.setEnabled(imagery)
         self.start.setText('开始下载' if imagery else '开始导出')
-        self.persist_preferences();self.replan();self.update_health();self.refresh_quota()
+        self.persist_preferences();self.replan();self.update_health();self.refresh_usage()
         if self.preview.currentData()=='follow':self.reload_map()
 
     def elevation_changed(self):
         self.dem_panel.setVisible(self.elevation.currentData()=='local');self.render_dem();self.replan()
 
-    def manage_sources(self):
-        from .source_dialog import SourcesDialog
-        dialog=SourcesDialog(self.settings,self.options(),self)
-        if dialog.exec():
-            old=getattr(dialog,'saved_id',self.imagery_source.currentData());self.settings=dialog.settings
-            self.imagery_source.blockSignals(True);self.imagery_source.clear()
-            for source in list_sources(self.settings):self.imagery_source.addItem(source['name'],source['id'])
-            self.imagery_source.setCurrentIndex(max(0,self.imagery_source.findData(old)));self.imagery_source.blockSignals(False)
-            for key,field in self.fields.items():field.setText(self.settings.get(key,''))
-            self.source_changed()
+    def open_sources(self):
+        self.navigate(1)
+        if not self.sources_panel.busy:self.sources_panel.select_source(self.imagery_source.currentData())
+
+    def sources_saved(self,source_id):
+        self.settings={**self.sources_panel.settings,"proxy":self.proxy.text().strip()}
+        selected=source_id or self.imagery_source.currentData()
+        self.imagery_source.blockSignals(True);self.imagery_source.clear()
+        for source in list_sources(self.settings):self.imagery_source.addItem(source['name'],source['id'])
+        self.imagery_source.setCurrentIndex(max(0,self.imagery_source.findData(selected)));self.imagery_source.blockSignals(False)
+        self.source_changed()
+        if source_id and self.preview.currentData()==source_id:self.reload_map()
 
     def choose_dem(self):
         path,_=QFileDialog.getOpenFileName(self,'选择本地 DEM',self.dem_path.text(),'GeoTIFF (*.tif *.tiff)')
@@ -517,39 +522,43 @@ class Window(QMainWindow):
         page.serviceAlert.connect(lambda message:bridge.mapStatus(message,False))
         view._bridge=bridge;view._channel=channel;view._profile=p;return view
 
-    def build_accounts(self):
+    def build_sources(self):
+        page=QWidget();layout=QVBoxLayout(page);layout.setContentsMargins(4,4,4,4);layout.setSpacing(14)
+        intro=QVBoxLayout();intro.setSpacing(4);intro.addWidget(label("图源管理",False,"pageTitle"))
+        intro.addWidget(label("内置与自定义影像图源统一在此配置；凭据由当前 Windows 用户加密保存，任务使用启动时的配置。仅高程导出无需影像凭据。",muted=True));layout.addLayout(intro)
+        self.sources_panel=SourcesPanel(self.settings,self.options(),host=self);self.sources_panel.changed.connect(self.sources_saved);layout.addWidget(self.sources_panel,1)
+        terrain,tb=card("高程 · FABDEM 真实地形","无需 API Key")
+        tb.addWidget(label("原始分辨率约 30 米。0 米模式跳过地形网络；失败后可保留卫星成果再切换 0 米。",muted=True))
+        self.terrain_status=label("",muted=True);tb.addWidget(self.terrain_status)
+        tr=QHBoxLayout();tr.setSpacing(8);tr.addWidget(button("数据来源 / 许可",lambda:QDesktopServices.openUrl(QUrl("https://research-information.bris.ac.uk/en/datasets/fabdem-v1-2/"))));tr.addWidget(button("网络测试",self.test_terrain));tb.addLayout(tr)
+        self.sources_panel.side_layout.addWidget(terrain)
+        self.pages.addWidget(page)
+
+    def build_previews(self):
         page=QScrollArea();page.setWidgetResizable(True);page.setFrameShape(QFrame.Shape.NoFrame);page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);content=QWidget();layout=QVBoxLayout(content);layout.setContentsMargins(4,4,12,4);layout.setSpacing(14)
-        intro=QVBoxLayout();intro.setSpacing(4);intro.addWidget(label("账户配置",False,"pageTitle"))
-        intro.addWidget(label("按所选图源配置凭据；仅高程导出无需影像凭据。凭据由当前 Windows 用户加密保存，任务使用启动时的配置。",muted=True));intro.addWidget(button("天地图与自定义图源",self.manage_sources));layout.addLayout(intro)
-        self.account_cards={};self.account_grid=cards=QGridLayout();cards.setHorizontalSpacing(14);cards.setVerticalSpacing(14);cards.setColumnStretch(0,1);cards.setColumnStretch(1,1);layout.addLayout(cards)
+        intro=QVBoxLayout();intro.setSpacing(4);intro.addWidget(label("地图预览",False,"pageTitle"))
+        intro.addWidget(label("预览底图只用于定位和绘制选区，不改变导出影像来源。高德 / 百度使用各自平台额度；选择 Mapbox 或“跟随导出影像”时使用图源管理中的凭据。",muted=True));layout.addLayout(intro)
+        address_card,ab=card("本机预览地址","高德 / 百度控制台的域名 / Referer 白名单按此地址填写；端口被占用时地址会变化")
+        address=QLineEdit(self.server.url+"map.html");address.setReadOnly(True);address.setToolTip(self.server.url+"map.html");ar=QHBoxLayout();ar.setSpacing(8);ar.addWidget(address,1);ar.addWidget(button("复制地址",lambda:QApplication.clipboard().setText(self.server.url+"map.html")));ab.addLayout(ar)
+        layout.addWidget(address_card)
+        cards=QGridLayout();cards.setHorizontalSpacing(14);cards.setVerticalSpacing(14);cards.setColumnStretch(0,1);cards.setColumnStretch(1,1);layout.addLayout(cards)
         for i,(platform,(title,fields,console,docs,guide)) in enumerate(GUIDES.items()):
-            card_frame,body=card(title,CAPTIONS[platform]);self.account_cards[platform]=card_frame;form=QGridLayout();form.setHorizontalSpacing(14);form.setVerticalSpacing(10);form.setColumnStretch(0,1);form.setColumnStretch(1,1)
-            for key,title,is_secret in fields:
+            card_frame,body=card(title,CAPTIONS[platform]);form=QGridLayout();form.setHorizontalSpacing(14);form.setVerticalSpacing(10);form.setColumnStretch(0,1);form.setColumnStretch(1,1)
+            for index,(key,title,is_secret) in enumerate(fields):
                 field=QLineEdit(self.settings.get(key,""));field.setMinimumWidth(0);field.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed);self.fields[key]=field;editor=field
                 if is_secret:
                     field.setEchoMode(QLineEdit.EchoMode.Password);editor=QWidget();row=QHBoxLayout(editor);row.setContentsMargins(0,0,0,0);row.setSpacing(8);row.addWidget(field,1);show=QCheckBox("显示");show.toggled.connect(lambda on,w=field:w.setEchoMode(QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password));row.addWidget(show)
-                index=fields.index((key,title,is_secret));grid_field(form,index//2,index%2,title,editor)
+                grid_field(form,index//2,index%2,title,editor)
                 field.textChanged.connect(lambda _,p=platform:self.dirty(p))
             if len(fields)==1:form.addWidget(label("仅用于地图预览\n无需填写服务端 SK / SN",muted=True),0,1,Qt.AlignmentFlag.AlignBottom)
             body.addLayout(form);state=label("已保存" if self.settings.get(fields[-1][0]) else "尚未配置",muted=True);self.card_status[platform]=state;body.addWidget(state)
             actions=QGridLayout();actions.setHorizontalSpacing(8);actions.setVerticalSpacing(8)
             for col in range(3):actions.setColumnStretch(col,1)
-            actions.addWidget(button("保存配置",lambda _,p=platform:self.save_platform(p),True),0,0);actions.addWidget(button("测试 · 1 次请求" if platform=="mapbox" else "测试地图",lambda _,p=platform:self.test_platform(p)),0,1);actions.addWidget(button("删除配置",lambda _,p=platform:self.delete_platform(p),danger=True),0,2)
+            actions.addWidget(button("保存配置",lambda _,p=platform:self.save_platform(p),True),0,0);actions.addWidget(button("测试地图",lambda _,p=platform:self.test_platform(p)),0,1);actions.addWidget(button("删除配置",lambda _,p=platform:self.delete_platform(p),danger=True),0,2)
             guidebox=label(guide+"\n\n资料核对：2026-10-07；申请和额度规则以当前控制台为准。",role="callout");guidebox.hide()
-            actions.addWidget(button("获取 Token" if platform=="mapbox" else "获取 Key / AK",lambda _,w=guidebox:w.setVisible(not w.isVisible())),1,0);actions.addWidget(button("平台控制台",lambda _,u=console:QDesktopServices.openUrl(QUrl(u))),1,1);actions.addWidget(button("官方教程",lambda _,u=docs:QDesktopServices.openUrl(QUrl(u))),1,2);body.addLayout(actions)
-            if platform!="mapbox":
-                body.addWidget(divider());body.addWidget(label("本机预览地址 · 用于域名 / Referer 白名单",False,muted=True))
-                address=QLineEdit(self.server.url+"map.html");address.setReadOnly(True);address.setToolTip(self.server.url+"map.html");address.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed);ar=QHBoxLayout();ar.setSpacing(8);ar.addWidget(address,1);ar.addWidget(button("复制地址",lambda:QApplication.clipboard().setText(self.server.url+"map.html")));body.addLayout(ar)
-            body.addWidget(guidebox);body.addStretch();cards.addWidget(card_frame,i//2,i%2)
-        quota,qf=card("Mapbox 额度与本机记录","手动录入控制台数据作为基准");self.account_cards['quota']=quota;qgrid=QGridLayout();qgrid.setHorizontalSpacing(14);qgrid.setVerticalSpacing(10);qgrid.setColumnStretch(0,1);qgrid.setColumnStretch(1,1)
-        self.account_type=combo([("未知 / 未核对","unknown"),("标准账户","standard"),("试用账户","trial")]);self.account_type.setCurrentIndex(max(0,self.account_type.findData(self.settings.get("account_type","unknown"))))
-        self.quota=integer(0,1000000000,int(self.settings.get("quota",0)));self.quota.setSpecialValueText("未知");self.usage=integer(0,1000000000,int(self.settings.get("usage",0)));self.cycle=QLineEdit(self.settings.get("cycle",""));self.cycle.setPlaceholderText("周期 / 控制台来源");self.cycle.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed)
-        for i,(title,field) in enumerate((("账户类型",self.account_type),("本周期请求额度",self.quota),("控制台已用基准",self.usage),("周期 / 数据来源",self.cycle))):grid_field(qgrid,i//2,i%2,title,field)
-        qf.addLayout(qgrid);self.quota_status=label("",muted=True);qf.addWidget(self.quota_status);qf.addWidget(button("保存手动基准 / 更新时间",self.save_quota,True))
-        qf.addWidget(label("未录入额度时显示未知。本机记录不代表全账户计费；公共 Token 不自动查询余额，具体额度以控制台为准。",role="callout"));qf.addStretch();cards.addWidget(quota,1,1)
-        terrain,tb=card("FABDEM 真实地形","无需 API Key");tf=QHBoxLayout();tf.setSpacing(8)
-        tf.addWidget(label("原始分辨率约 30 米。0 米模式跳过地形网络；失败后可保留卫星成果再切换 0 米。",muted=True),1);tf.addWidget(button("数据来源 / 许可",lambda:QDesktopServices.openUrl(QUrl("https://research-information.bris.ac.uk/en/datasets/fabdem-v1-2/"))));tf.addWidget(button("网络测试",self.test_terrain));tb.addLayout(tf);layout.addWidget(terrain)
-        tester,vb=card("地图加载测试");self.test_status=label("地图测试由您主动触发；高德 / 百度测试不消耗 Mapbox 下载请求。",muted=True);vb.addWidget(self.test_status)
+            actions.addWidget(button("获取 Key / AK",lambda _,w=guidebox:w.setVisible(not w.isVisible())),1,0);actions.addWidget(button("平台控制台",lambda _,u=console:QDesktopServices.openUrl(QUrl(u))),1,1);actions.addWidget(button("官方教程",lambda _,u=docs:QDesktopServices.openUrl(QUrl(u))),1,2);body.addLayout(actions)
+            body.addWidget(guidebox);body.addStretch();cards.addWidget(card_frame,0,i)
+        tester,vb=card("地图加载测试");self.test_status=label("地图测试由您主动触发，实际加载所选平台地图并使用该平台额度。",muted=True);vb.addWidget(self.test_status)
         self.test_view=self.make_web(True);self.test_view.setMinimumHeight(300);self.test_view.hide();vb.addWidget(self.test_view);layout.addWidget(tester)
         layout.addStretch();page.setWidget(content);self.pages.addWidget(page)
 
@@ -561,7 +570,6 @@ class Window(QMainWindow):
     def save_platform(self,platform):
         data={k:v for k,v in self.settings.items() if k!="proxy"}
         for key,_,_ in GUIDES[platform][1]:data[key]=self.fields[key].text().strip()
-        if platform=="mapbox" and data.get("mapbox_token") and not data["mapbox_token"].startswith("pk."):self.card_status[platform].setText("请输入 pk. 公共 Token");return
         try:
             save(data);data["proxy"]=self.proxy.text().strip();self.settings=data;self.dirty(platform);self.update_health()
             if self.preview_provider() in (platform,'source:'+platform):self.reload_map()
@@ -588,34 +596,12 @@ class Window(QMainWindow):
         if self.plan:self.start.setEnabled(not self.running())
     def test_platform(self,platform):
         if any(self.fields[k].text().strip()!=self.settings.get(k,"") for k,_,_ in GUIDES[platform][1]):self.card_status[platform].setText("请先保存编辑，再测试已保存配置");return
-        if platform=="mapbox":
-            token=self.settings.get("mapbox_token","")
-            if not token:self.card_status[platform].setText("请先保存公共 Token");return
-            self.card_status[platform].setText("正在验证瓦片接口；发起 1 次请求，重试关闭");options=self.options();options["retries"]=0
-            def test():
-                import mercantile
-                return fetch_tile(mercantile.tile(121.58901,31.2592,17),token,options,Control(lambda *a,**k:None),Ledger(),"verify",True)
-            def complete(result,error):
-                self.card_status[platform].setText("连接成功；验证瓦片可按缓存规则复用" if not error else redact(error,[token]));self.refresh_quota();self.replan()
-            self.jobs.run(test,complete)
-        else:
-            if not self.settings.get("amap_key" if platform=="amap" else "baidu_ak"):self.card_status[platform].setText("请先保存此平台配置");return
-            self.test_provider=platform;self.test_success=False;self.test_view.show();self.test_view.load(QUrl(self.server.url+"map.html"));self.test_status.setText("实际加载 "+GUIDES[platform][0]+"；使用该平台额度")
-    def save_quota(self):
-        data={k:v for k,v in self.settings.items() if k!="proxy"};data.update(account_type=self.account_type.currentData(),quota=self.quota.value(),usage=self.usage.value(),cycle=self.cycle.text(),quota_updated=datetime.now(timezone.utc).isoformat())
-        try:save(data);data["proxy"]=self.proxy.text().strip();self.settings=data;self.refresh_quota()
-        except Exception as exc:self.quota_status.setText("保存失败："+str(exc))
-    def refresh_quota(self):
-        if not hasattr(self,"quota_status"):return
-        counts=Ledger().counts(source='mapbox');since=Ledger().counts(self.settings.get("quota_updated",""),source='mapbox');recorded=sum(since.get(k,0) for k in ("download","preview","verify"));q=int(self.settings.get("quota",0));used=int(self.settings.get("usage",0));update=self.settings.get("quota_updated","尚未更新")
-        selected=Ledger().counts(source=self.imagery_source.currentData());self.preview_usage.setText(f"{self.imagery_source.currentText()} · 本机下载 {selected['download']} / 预览 {selected['preview']} / 验证 {selected['verify']} 次")
-        self.quota_status.setText(f"本机：下载 {counts['download']} / 预览 {counts['preview']} / 验证 {counts['verify']}；其中重试 {counts['retry']}\n手动更新：{update}；周期：{self.settings.get('cycle','未填写')}")
-        if not self.export_content.currentData():self.balance_label.setText('仅高程：不请求影像瓦片')
-        elif self.imagery_source.currentData()!='mapbox':self.balance_label.setText('所选平台剩余额度未知；请以平台控制台为准')
-        elif not q:self.balance_label.setText("Mapbox 剩余额度未知；可在账户页手动更新")
-        else:
-            remaining=max(0,q-used-recorded);required=self.plan.get("with_retry_reserve",0) if self.plan else 0
-            self.balance_label.setText(f"参考剩余 {remaining:,} 次\n"+("预计超出已录入额度，请核对控制台" if required>remaining else "预估在已录入额度内")+"\n非实时全账户余额，其他设备用量未知")
+        if not self.settings.get("amap_key" if platform=="amap" else "baidu_ak"):self.card_status[platform].setText("请先保存此平台配置");return
+        self.test_provider=platform;self.test_success=False;self.test_view.show();self.test_view.load(QUrl(self.server.url+"map.html"));self.test_status.setText("实际加载 "+GUIDES[platform][0]+"；使用该平台额度")
+    def refresh_usage(self):
+        if not self.export_content.currentData():self.preview_usage.setText('仅高程：不请求影像瓦片');return
+        counts=Ledger().counts(source=self.imagery_source.currentData())
+        self.preview_usage.setText(f"{self.imagery_source.currentText()} · 本机下载 {counts['download']} / 预览 {counts['preview']} / 验证 {counts['verify']} 次；剩余额度以平台控制台为准")
     def apply_coordinates(self):
         if self.selection_locked:return
         selection={"shape":self.input_shape.currentData(),"system":"WGS84","points":[[self.lon.value(),self.lat.value()]]}
@@ -664,7 +650,7 @@ class Window(QMainWindow):
             if imagery and result.get('zoom') is not None:
                 self.zoom.blockSignals(True);self.zoom.setValue(result['zoom']);self.zoom.blockSignals(False)
                 self.estimate_label.setText(self.estimate_label.text()+f"\n{source['name']} · 层级 {result['zoom']} · 原始像素约 {result.get('native_resolution_m',0):.2f} 米")
-            self.start.setEnabled(not self.running());self.refresh_quota()
+            self.start.setEnabled(not self.running());self.refresh_usage()
         self.jobs.run(lambda:estimate(selection,res,zoom,reserve,source=source,imagery=imagery,credentials=credentials),complete)
     def choose_output(self):
         path=QFileDialog.getExistingDirectory(self,"选择输出位置",self.output.text())
@@ -732,7 +718,7 @@ class Window(QMainWindow):
         self.read_worker();self.read_errors()
         if code!=0 and self.task_state not in ("failed","cancelled"):self.task_state="failed";self.stage.setText(f"任务异常退出（{code}），请查看日志")
         for b in (self.pause,self.resume,self.cancel):b.setEnabled(False)
-        self.set_selection_locked(False);self.start.setEnabled(bool(self.plan));self.flat_retry.setVisible(self.terrain_failed);self.refresh_quota();self.replan()
+        self.set_selection_locked(False);self.start.setEnabled(bool(self.plan));self.flat_retry.setVisible(self.terrain_failed);self.refresh_usage();self.replan()
     def worker_error(self,error):
         self.append_log("后台进程错误："+self.process.errorString())
         if self.process.state()==QProcess.ProcessState.NotRunning:
@@ -779,12 +765,12 @@ class Window(QMainWindow):
         def work():
             with session_for(options) as session:
                 r=session.head(FABDEM_BASE+"FABDEM_v1-2_tiles.geojson",timeout=(options["connect_timeout"],options["read_timeout"]));r.raise_for_status();return "FABDEM 网络可达（HEAD），实际下载还需支持 Range"
-        self.jobs.run(work,lambda result,error:self.test_status.setText(result if not error else "FABDEM 网络失败："+redact(error)))
+        self.jobs.run(work,lambda result,error:self.terrain_status.setText(result if not error else "FABDEM 网络失败："+redact(error)))
     def closeEvent(self,event):
         if self.running():
             self.command("cancel");self.process.waitForFinished(1500)
             if self.running():self.process.kill();self.process.waitForFinished(1000)
-        self.jobs.pool.shutdown(wait=False,cancel_futures=True);self.server.close();event.accept()
+        self.jobs.pool.shutdown(wait=False,cancel_futures=True);self.sources_panel.shutdown();self.server.close();event.accept()
 
 
 def main():

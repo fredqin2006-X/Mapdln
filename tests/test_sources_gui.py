@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 
 from mapdln.gui import Window
-from mapdln.source_dialog import SourcesDialog
+from mapdln.source_dialog import SourcesPanel
 from mapdln.sources import get_source
 
 
@@ -48,7 +48,7 @@ def test_source_switch_preserves_region_and_independent_preview(window):
 
 def test_source_dialog_extracts_secrets_without_changing_live_settings(window):
     w=window;original=json.loads(json.dumps(w.settings))
-    d=SourcesDialog(w.settings,w.options(),w);d.new_source();d.name.setText('离线测试配置')
+    d=SourcesPanel(w.settings,w.options(),w);d.new_source();d.name.setText('离线测试配置')
     d.url.setPlainText('https://example.invalid/{z}/{x}/{y}.png?key=secret-value')
     d.headers.setPlainText('{"Authorization":"Bearer hidden-value"}')
     spec,credentials=d.collect()
@@ -57,12 +57,12 @@ def test_source_dialog_extracts_secrets_without_changing_live_settings(window):
     assert credentials['headers']['Authorization']=='Bearer hidden-value'
     assert 'secret-value' not in json.dumps(spec) and 'hidden-value' not in json.dumps(spec)
     assert w.settings==original
-    d.reject()
+    d.shutdown()
 
 
 def test_source_dialog_retains_basic_auth_and_tests_selection_center(window,tmp_path):
     w=window;w.lon.setValue(12.5);w.lat.setValue(48.2);w.apply_coordinates()
-    d=SourcesDialog(w.settings,w.options(),w);d.new_source();d.name.setText('本地测试')
+    d=SourcesPanel(w.settings,w.options(),w);d.new_source();d.name.setText('本地测试')
     d.url.setPlainText('https://user:pass@example.invalid/{z}/{x}/{y}.png')
     spec,credentials=d.collect()
     assert credentials['headers']['Authorization']=='Basic dXNlcjpwYXNz'
@@ -71,7 +71,7 @@ def test_source_dialog_retains_basic_auth_and_tests_selection_center(window,tmp_
         d.test_source();wait_for(lambda:not d.busy)
         import mercantile
         assert fetch.call_args.args[0]==mercantile.tile(w.grid.geographic.centroid.x,w.grid.geographic.centroid.y,12)
-    d.reject()
+    d.shutdown()
 
 
 def test_wmts_dialog_reads_layers_and_invalidates_edited_service(window):
@@ -80,7 +80,7 @@ def test_wmts_dialog_reads_layers_and_invalidates_edited_service(window):
     spec=default_source();spec.update(id='wmts-test',name='正射影像',protocol='wmts',min_zoom=0,max_zoom=1,matrix_ids={'0':'grid:0','1':'grid:1'},url_template='https://example.invalid/wmts?TILEMATRIX={z}&TILECOL={x}&TILEROW={y}&tk={token}')
     response=MagicMock();response.__enter__.return_value=response;response.status_code=200;response.iter_content.return_value=[b'<Capabilities/>']
     session=MagicMock();session.__enter__.return_value=session;session.get.return_value=response
-    d=SourcesDialog(window.settings,window.options(),window);d.new_source();d.protocol.setCurrentIndex(d.protocol.findData('wmts'));d.url.setPlainText('https://example.invalid/wmts?tk=private-key')
+    d=SourcesPanel(window.settings,window.options(),window);d.new_source();d.protocol.setCurrentIndex(d.protocol.findData('wmts'));d.url.setPlainText('https://example.invalid/wmts?tk=private-key')
     with patch('mapdln.source_dialog.session_for',return_value=session),patch('mapdln.source_dialog.parse_wmts',return_value=[spec]):
         d.read_wmts();wait_for(lambda:not d.busy)
         saved,credential=d.collect()
@@ -89,18 +89,31 @@ def test_wmts_dialog_reads_layers_and_invalidates_edited_service(window):
         assert saved['id']==d.collect()[0]['id']
     d.url.setPlainText('https://different.invalid/wmts')
     with pytest.raises(ValueError,match='读取 WMTS'):d.collect()
-    d.reject()
+    d.shutdown()
 
 
 def test_source_dialog_saves_encrypted_source_and_selectable_configuration(window,tmp_path):
-    d=SourcesDialog(window.settings,window.options(),window);d.new_source();d.name.setText('测试源')
+    d=SourcesPanel(window.settings,window.options(),window);d.new_source();d.name.setText('测试源')
     d.url.setPlainText('https://example.invalid/{z}/{x}/{y}.png?tk={token}');d.token.setText('test-encrypted-token')
     d.save_source()
-    assert d.result()==d.DialogCode.Accepted
+    assert d.saved_id and '已保存' in d.status.text()
     assert get_source(d.settings,d.saved_id)['name']=='测试源'
     from mapdln.config import home
     config=(home()/'config.json').read_text(encoding='utf-8')
     assert 'test-encrypted-token' not in config
+
+
+def test_embedded_source_page_keeps_workbench_selector_in_sync(window):
+    w=window;w.imagery_source.setCurrentIndex(w.imagery_source.findData('tianditu'))
+    w.open_sources()
+    assert w.pages.currentIndex()==1 and w.sources_panel.current_id=='tianditu'
+    p=w.sources_panel;p.new_source();p.name.setText('嵌入测试');p.url.setPlainText('https://example.invalid/{z}/{x}/{y}.png')
+    p.save_source()
+    assert w.imagery_source.currentText()=='嵌入测试' and get_source(w.settings,p.saved_id)['name']=='嵌入测试'
+    assert p.selected_id()==p.saved_id
+    p.delete_source()
+    assert w.imagery_source.findText('嵌入测试')<0 and w.imagery_source.currentData()=='mapbox'
+    assert not hasattr(w,'balance_label') and 'mapbox_token' not in w.fields
 
 
 def test_dem_only_gui_runs_worker_without_online_credentials(window,tmp_path):

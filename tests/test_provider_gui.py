@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 
 from mapdln.config import home, load
 from mapdln.geometry import from_wgs
-from mapdln.source_dialog import SourcesDialog
+from mapdln.source_dialog import SourcesPanel
 from mapdln.sources import get_source
 
 
@@ -29,12 +29,12 @@ def dialogs(tmp_path,monkeypatch):
     app=QApplication.instance() or QApplication([])
     opened=[]
     def create(provider='jilin',settings=None):
-        dialog=SourcesDialog(settings or {},{})
-        dialog.selector.setCurrentIndex(dialog.selector.findData(provider))
+        dialog=SourcesPanel(settings or {},{})
+        dialog.select_source(provider)
         opened.append(dialog)
         return dialog
     yield create
-    for dialog in opened:dialog.reject()
+    for dialog in opened:dialog.shutdown()
     app.processEvents()
 
 
@@ -51,8 +51,9 @@ def test_provider_presets_keep_identity_but_allow_service_configuration(dialogs,
     dialog.name.setText('Unrelated layer name')
     source,_=dialog.collect()
     assert source['id']==provider and source['name']==get_source({},provider)['name']
+    changes=[];dialog.changed.connect(changes.append)
     dialog.delete_source()
-    assert dialog.result()!=dialog.DialogCode.Accepted
+    assert not changes and dialog.saved_id is None
     dialog.probe_complete(None,None)
     assert not dialog.delete_button.isEnabled()
 
@@ -64,7 +65,7 @@ def test_jilin_form_save_encrypted_roundtrip_and_no_live_mutation(dialogs):
     assert dialog.token_label.text()=='访问 TK' and dialog.mk.text()=='old-mk'
     dialog.token.setText('jilin-private-tk');dialog.mk.setText('jilin-private-mk')
     dialog.save_source()
-    assert dialog.result()==dialog.DialogCode.Accepted,dialog.status.text()
+    assert dialog.saved_id=='jilin',dialog.status.text()
     assert original==untouched
     assert 'jilin' in dialog.settings['provider_sources']
     assert not dialog.settings.get('custom_sources')
@@ -155,10 +156,10 @@ def test_provider_export_omits_credentials_and_import_is_custom(dialogs,tmp_path
 
 def test_provider_switch_hides_mk_and_clears_old_wmts_choices(dialogs):
     dialog=dialogs();dialog.mk.setText('not-for-tencent');dialog.wmts_specs=[{'name':'stale'}];dialog.layers.addItem('stale')
-    dialog.selector.setCurrentIndex(dialog.selector.findData('tencent'))
+    dialog.select_source('tencent')
     assert dialog.mk.isHidden() and dialog.token_label.text()=='Key / Token'
     assert not dialog.wmts_specs and dialog.layers.count()==0
-    dialog.selector.setCurrentIndex(dialog.selector.findData('mapbox'))
+    dialog.select_source('mapbox')
     assert not dialog.url.isEnabled() and not dialog.protocol.isEnabled() and not dialog.advanced.isEnabled()
     dialog.new_source()
     assert dialog.name.isEnabled() and dialog.url.isEnabled() and dialog.mk.isHidden()
