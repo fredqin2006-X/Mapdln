@@ -275,3 +275,9 @@ Copy-Item -LiteralPath test-output\build-backup\mapdln-97a94e466872.exe -Destina
 根目录 / dist 的 EXE 均为 **183,856,264 字节（175.34 MiB）**，SHA-256：`eae978be2c7cd2af690ff0605736e68e063ffba7d042741943d18907fabcddea`。2.6.1 入口备份为 `test-output/build-backup/mapdln-5ad1d98016c5.exe`。构建日志：`test-output/build-2.7.0.log`；截图：`test-output/ui-270/`。
 
 回退源码使用 `git revert 365d6e0` 后重新构建；临时恢复 2.6.1 入口前先退出程序，再复制上述备份至根目录 `mapdln.exe`。本版未改配置结构，旧额度字段保留在配置中，回退后仍可读取。
+
+## 15. 2.7.1 表单对齐修正与回退
+
+2026-10-28 在本地 `main` 提交实现 `b8f532b`，随后更新本维护文档。图源编辑区标签改为垂直居中（“服务地址”与多行框首行对齐）；`STYLE` 统一单行输入框 / 下拉框 / 数值框高度为 34px（工作台数值框原为 37px），并给多行服务地址框设置最小高度，避免展开高级设置时被压缩。逐页实测控件高度并截图检查（`test-output/ui-270/align-*.png`）。未推送或创建 Release。
+
+正式构建完整回归 **179 项通过（76.75 秒）**，冻结包检查与冻结后台缓存导出通过；成品在隔离配置中启动无错误。根目录 / dist 的 EXE 均为 **183,855,414 字节（175.34 MiB）**，SHA-256：`5034351e63e573a5cb30133cd00b71d2e98fbc7a810e91fc5717cb0ab40b5612`。2.7.0 入口备份为 `test-output/build-backup/mapdln-eae978be2c7c.exe`；构建日志：`test-output/build-2.7.1.log`。回退使用 `git revert b8f532b` 后重新构建，或退出程序后复制上述备份至根目录。
