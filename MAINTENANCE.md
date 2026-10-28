@@ -263,3 +263,5 @@ Copy-Item -LiteralPath test-output\build-backup\mapdln-97a94e466872.exe -Destina
 根目录 / dist 的 EXE 均为 **184,363,800 字节（175.82 MiB）**，SHA-256：`5ad1d98016c5cf8b9603db69e35bc929d347fa387d3cd389d2062e33aa060e3b`。2.6.0 入口备份为 `test-output/build-backup/mapdln-fcada926545b.exe`。构建日志：`test-output/build-2.6.1.log`；五种导出报告：`test-output/build-verification.json`；源码 / 成品核对、网络响应、样本及界面位置报告：`test-output/tianditu-check-20261028/`，网络结论见其中 `RESULT.md`。
 
 回退源码使用 `git revert f55ba18` 后重新构建；临时恢复 2.6.0 入口前先退出程序，再复制上述备份至根目录 `mapdln.exe`。本版未改账户配置结构。
+
+同日用户提供新建的服务端 Key 后补测，并在本地 `main` 提交验收记录 `c422622`，随后更新本段。两种投影在普通客户端、HTTP / HTTPS、z3/z12/z18 的 12 次瓦片请求全部成功并解码为 JPEG；当前 2.6.1 成品在新隔离配置 / 缓存中以零重试完成北京 40×40 米、1 米网格导出，实际新增请求 1 次，影像 / 掩膜 / 0 米 DEM / 高度图同网格。详见 `test-output/tianditu-serverkey-20261028/RESULT.md` 与 `result.json`。没有修改程序、重建、改变实际账户配置或记录 Key 至公开文件；成品版本和哈希沿用本节已有记录。此前浏览器端 Key 的 403 结论仅适用于旧 Key，不再代表新服务端 Key 的验证结果。
