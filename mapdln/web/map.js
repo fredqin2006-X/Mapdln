@@ -4,6 +4,7 @@
 let bridge=null, map=null, provider='amap', system='GCJ02', config={}, tool='pan';
 let controls=[],boundary=[],draft=[],shape='polygon',drag=null,mapReady=false,loadId=0;
 let circleRadius=0;
+let startupView={centers:{WGS84:[121.58901,31.2592]},zoom:15},lastView='';
 let demCoverage=[];
 let rectangle=null,hover=null,navigationDrag=null,pendingSubmit=null,submitFrame=0,selectionLocked=false;
 const svg=document.getElementById('overlay'),status=document.getElementById('status'),hint=document.getElementById('hint');
@@ -12,7 +13,10 @@ const mapHost=document.getElementById('map'),draftPoints=document.getElementById
 const base=location.href.substring(0,location.href.lastIndexOf('/')+1);
 window.setTheme=dark=>document.documentElement.classList.toggle('dark',dark);
 function report(message,ok=false){status.textContent=message;status.classList.toggle('ok',!!ok);if(bridge)bridge.mapStatus(message,ok);}
-function leafletMap(){const m=L.map('map',{doubleClickZoom:false,zoomControl:false}).setView([31.2592,121.58901],15);L.control.zoom({position:'bottomright'}).addTo(m);return m;}
+function initialCenter(){return startupView.centers[system]||startupView.centers.WGS84;}
+function leafletMap(minZoom=0){const p=initialCenter();const m=L.map('map',{doubleClickZoom:false,zoomControl:false,minZoom,maxZoom:24}).setView([p[1],p[0]],startupView.zoom);L.control.zoom({position:'bottomright'}).addTo(m);return m;}
+window.currentMapView=()=>{if(!map)return null;const p=map.getCenter();return {center:[p.lng,p.lat],zoom:map.getZoom(),system};};
+function publishView(){const view=JSON.stringify(window.currentMapView());if(bridge&&view!=='null'&&view!==lastView){lastView=view;bridge.mapViewChanged(view);}}
 function script(url){return new Promise((resolve,reject)=>{let s=document.createElement('script');const timer=setTimeout(()=>{s.remove();reject(new Error('地图脚本加载超时，请检查网络或预览代理'));},20000);s.src=url;s.onload=()=>{clearTimeout(timer);resolve();};s.onerror=()=>{clearTimeout(timer);reject(new Error('地图脚本加载失败，请检查网络与代理'));};document.head.appendChild(s);});}
 function pixel(p){
  if(!map)return {x:0,y:0};
@@ -64,6 +68,7 @@ function paintDraft(){
 }
 function paint(){
  if(!map)return;
+ publishView();
  const dem=document.getElementById('dem-coverage');if(dem)dem.setAttribute('d',path(demCoverage.map(pixel),true));
  const points=boundary.map(pixel);outline.setAttribute('d',points.length?'M'+points.map(p=>p.x+','+p.y).join('L')+'Z':'');
  handles.replaceChildren();
@@ -92,7 +97,8 @@ window.setSelectionLocked=function(locked){
 window.setCenter=function(p){if(!map)return;if(provider==='amap')map.setCenter(p);else if(provider==='baidu')map.panTo(new BMapGL.Point(...p));else map.setView([p[1],p[0]],map.getZoom());};
 window.setDemCoverage=function(points){demCoverage=points||[];paint();};
 window.fitCoverage=function(points){if(!map||points.length!==2)return;if(provider==='amap')map.setBounds(new AMap.Bounds(points[0],points[1]));else if(provider==='baidu')map.setViewport(points.map(p=>new BMapGL.Point(...p)));else map.fitBounds(points.map(p=>[p[1],p[0]]),{padding:[30,30]});};
-window.previewProvider=async function(p){
+window.previewProvider=async function(p,view){
+ if(view)startupView=view;
  provider=p;mapReady=false;const id=++loadId;report('加载地图…');
  try{
   report('读取本机地图配置…');
@@ -107,7 +113,7 @@ window.previewProvider=async function(p){
    if(!window.AMap)await script(base+'sdk/amap.js');
    report('高德 SDK 已加载，正在创建地图…');
    if(id!==loadId)return;
-   map=new AMap.Map('map',{zoom:15,center:[121.5928,31.2573],viewMode:'2D'});
+   map=new AMap.Map('map',{zoom:startupView.zoom,center:initialCenter(),viewMode:'2D'});
    report('高德地图已创建，正在加载瓦片…');
    map.on('complete',()=>{const first=!mapReady;mapReady=true;report('高德地图已加载 · GCJ-02 → WGS84 转换用于下载',true);if(first&&bridge)bridge.providerReady(system);paint();});
    map.on('mapmove',paint);map.on('zoomchange',paint);map.on('resize',paint);
@@ -116,7 +122,7 @@ window.previewProvider=async function(p){
    if(!config.baidu_ak)throw new Error('请到账户配置页保存浏览器端 AK，并按本机地址设置 Referer 白名单');
    if(!window.BMapGL)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('百度地图初始化超时，请检查浏览器端 AK、Referer 白名单和网络')),25000);window.mapdlnBaiduReady=()=>{clearTimeout(timer);resolve();};script('https://api.map.baidu.com/api?v=1.0&type=webgl&ak='+encodeURIComponent(config.baidu_ak)+'&callback=mapdlnBaiduReady').catch(reject);});
    if(id!==loadId)return;
-   map=new BMapGL.Map('map');map.centerAndZoom(new BMapGL.Point(121.5993,31.2633),15);map.enableScrollWheelZoom();map.addControl(new BMapGL.ScaleControl());
+   map=new BMapGL.Map('map');map.centerAndZoom(new BMapGL.Point(...initialCenter()),startupView.zoom);map.enableScrollWheelZoom();map.addControl(new BMapGL.ScaleControl());
    map.addEventListener('tilesloaded',()=>{const first=!mapReady;mapReady=true;report('百度地图已加载 · BD-09 → WGS84 转换用于下载',true);if(first&&bridge)bridge.providerReady(system);paint();});
    ['moving','zoomend','resize'].forEach(e=>map.addEventListener(e,paint));
   }else if(p==='offline'){
@@ -126,7 +132,7 @@ window.previewProvider=async function(p){
    const source=(config.sources||[]).find(s=>s.id===sourceId);if(!source)throw new Error('图源已删除，请重新选择导出影像');
    system=source.datum==='GCJ02'?'GCJ02':'WGS84';
    if(sourceId==='mapbox'&&!config.mapbox_available)throw new Error('请到账户配置页保存 Mapbox 公共 Token');
-   map=leafletMap();
+   map=leafletMap(source.min_zoom);
    const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
    const layer=L.tileLayer(base+'source-tiles/'+encodeURIComponent(sourceId)+'/{z}/{x}/{y}',{minZoom:source.min_zoom,maxZoom:24,maxNativeZoom:source.max_zoom,attribution:escape(source.attribution)}).addTo(map);
    L.control.scale({imperial:false}).addTo(map);
@@ -136,6 +142,7 @@ window.previewProvider=async function(p){
    map.on('move zoom resize',paint);
   }
   setPan(tool==='pan');
+  publishView();
   setTimeout(()=>{if(id===loadId&&!mapReady)report('地图未完成加载，请检查 Key 类型、安全密钥、Referer 白名单与网络。当前选区和参数已保留。');},25000);
  }catch(e){
   report(e.message);

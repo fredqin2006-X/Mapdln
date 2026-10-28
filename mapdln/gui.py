@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from string import Template
 from datetime import datetime
-from PySide6.QtCore import QObject,Signal,Slot,QUrl,QProcess,QTimer,Qt,QStandardPaths
+from PySide6.QtCore import QObject,Signal,Slot,QUrl,QProcess,QTimer,Qt,QStandardPaths,QEventLoop
 from PySide6.QtGui import QDesktopServices,QFont,QIcon,QPixmap,QPalette,QColor
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QLabel,
     QPushButton,QLineEdit,QDoubleSpinBox,QSpinBox,QStackedWidget,QScrollArea,
@@ -25,6 +25,7 @@ from .sources import get_source,list_sources,credentials_for,secret_values,build
 from .local_dem import inspect_dem,snapshot_dem
 from .widgets import FlatCombo
 from .source_dialog import SourcesPanel
+from .viewport import normalize_view,provider_views,locate,DEFAULT_VIEW
 
 
 class Jobs(QObject):
@@ -61,8 +62,18 @@ class Bridge(QObject):
     @Slot()
     def pageReady(self):
         w=self.window;provider=w.test_provider if self.test else w.preview_provider()
+        if w.closing:return
+        if not self.test:
+            w.map_page_ready=True
+            if w.location_pending:
+                w.map_status.setText('正在获取首次地图位置…');return
         view=w.test_view if self.test else w.web
-        view.page().runJavaScript("setTheme("+json.dumps(w.theme_dark)+");setSelectionLocked("+json.dumps(False if self.test else w.selection_locked)+");previewProvider("+json.dumps(provider)+")")
+        viewport=provider_views(w.map_view)
+        view.page().runJavaScript("setTheme("+json.dumps(w.theme_dark)+");setSelectionLocked("+json.dumps(False if self.test else w.selection_locked)+");previewProvider("+json.dumps(provider)+","+json.dumps(viewport)+")")
+    @Slot(str)
+    def mapViewChanged(self,text):
+        if self.test or self.window.closing:return
+        self.window.remember_map_view(text)
     @Slot(str)
     def providerReady(self,system):
         if not self.test:
@@ -291,6 +302,8 @@ class Window(QMainWindow):
         self.settings={};self.config_error=""
         try:self.settings=load()
         except Exception as exc:self.config_error="本机凭据无法解密，请重新保存："+str(exc)
+        self.map_view=normalize_view(self.settings.get('map_view'));self.location_pending=self.map_view is None
+        self.map_page_ready=False;self.closing=False
         self.selection=None;self.grid=None;self.plan=None;self.plan_generation=0;self.process=None;self.buffer=b"";self.task_state="idle";self.selection_locked=False
         self.terrain_failed=False;self.display_system="WGS84";self.test_provider="amap";self.test_success=False;self.fields={};self.card_status={};self.dem_info=None;self.dem_generation=0
         self.jobs=Jobs(self)
@@ -314,6 +327,7 @@ class Window(QMainWindow):
         self.debounce=QTimer(self);self.debounce.setSingleShot(True);self.debounce.setInterval(350);self.debounce.timeout.connect(self.calculate)
         self.ledger_timer=QTimer(self);self.ledger_timer.timeout.connect(self.refresh_usage);self.ledger_timer.start(15000)
         self.update_health();self.navigate(0);self.apply_theme();QApplication.styleHints().colorSchemeChanged.connect(lambda _:self.apply_theme())
+        if self.location_pending:self.jobs.run(locate,self.location_ready)
         self.web.load(QUrl(self.server.url+"map.html"))
         if self.config_error:self.map_status.setText(self.config_error)
 
@@ -631,7 +645,17 @@ class Window(QMainWindow):
         if self.selection['shape']=='circle':data['radius_m']=(self.grid.polygon.bounds[2]-self.grid.polygon.bounds[0])/2
         self.web.page().runJavaScript("updateSelection("+json.dumps(data)+")");self.area_label.setText(f"面积 {self.grid.polygon.area/10000:.3f} 公顷 · {self.grid.width:,} × {self.grid.height:,} 像素 · {self.grid.crs.to_string()} · {self.grid.resolution:g} m/px")
     def reload_map(self,*args):
-        if hasattr(self,"web"):self.web.load(QUrl(self.server.url+"map.html"))
+        if hasattr(self,"web"):
+            self.map_page_ready=False;self.web.load(QUrl(self.server.url+"map.html"))
+    def location_ready(self,result,error):
+        if self.closing:return
+        self.location_pending=False;self.map_view=normalize_view(result) or dict(DEFAULT_VIEW)
+        if self.map_page_ready:self.web._bridge.pageReady()
+    def remember_map_view(self,text):
+        try:view=normalize_view(json.loads(text))
+        except (ValueError,TypeError):return
+        if view:
+            self.map_view=view;self.settings['map_view']=view
     def replan(self,*args):
         if not hasattr(self,"debounce") or self.selection_locked:return
         self.plan=None;self.start.setEnabled(False);self.plan_generation+=1
@@ -769,6 +793,18 @@ class Window(QMainWindow):
                 r=session.head(FABDEM_BASE+"FABDEM_v1-2_tiles.geojson",timeout=(options["connect_timeout"],options["read_timeout"]));r.raise_for_status();return "FABDEM 网络可达（HEAD），实际下载还需支持 Range"
         self.jobs.run(work,lambda result,error:self.terrain_status.setText(result if not error else "FABDEM 网络失败："+redact(error)))
     def closeEvent(self,event):
+        self.closing=True
+        # Ask the renderer for the final centre even if the last drag/zoom is
+        # still in progress. A dead renderer must never prevent closing.
+        loop=QEventLoop();timer=QTimer();timer.setSingleShot(True);timer.timeout.connect(loop.quit)
+        def captured(text):
+            self.remember_map_view(text);loop.quit()
+        timer.start(500)
+        self.web.page().runJavaScript('window.currentMapView ? JSON.stringify(currentMapView()) : null',captured)
+        loop.exec();timer.stop()
+        if self.map_view:
+            self.settings['map_view']=self.map_view
+            self.persist_preferences()
         if self.running():
             self.command("cancel");self.process.waitForFinished(1500)
             if self.running():self.process.kill();self.process.waitForFinished(1000)
