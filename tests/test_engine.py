@@ -236,3 +236,15 @@ def test_http_retry_classification_and_request_accounting():
     response.status_code=403
     with patch('requests.Session.get',return_value=response):
         with pytest.raises(ValueError,match='403'):fetch_tile(mercantile.Tile(1,1,3),'pk.testing',{},control,Ledger())
+
+
+def test_external_task_identifier_never_controls_cleanup_path(tmp_path):
+    protected=tmp_path/'keep';protected.mkdir();marker=protected/'original.txt';marker.write_text('keep me')
+    out=tmp_path/'export'
+    task={'selection':selection(),'resolution':5,'imagery':False,'elevation':'flat',
+          'output':str(out),'task_id':'../../keep'}
+    with patch('requests.Session.get',side_effect=AssertionError('offline export')):
+        run_task(task,{},lambda *a,**k:None)
+    assert marker.read_text()=='keep me'
+    assert (out/'metadata.json').exists()
+    assert not list(out.glob('.work-*'))

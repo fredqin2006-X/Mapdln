@@ -5,6 +5,7 @@
 html,body{margin:0;height:100%;font:13px 'Microsoft YaHei UI','Microsoft YaHei',sans-serif;background:var(--map);color:var(--ink)}#map{height:100%;background:var(--map)}
 #overlay{position:absolute;inset:0;width:100%;height:100%;z-index:500;pointer-events:none;touch-action:none}#overlay.active{pointer-events:auto;cursor:crosshair}
 #outline{fill:#0e9f8c2e;stroke:#0e9f8c;stroke-width:2.2;stroke-linejoin:round;pointer-events:visiblePainted;cursor:move}
+#dem-coverage{fill:none;stroke:#c38a32;stroke-width:2;stroke-dasharray:8 5;pointer-events:none}
 .handle{fill:white;stroke:#0e9f8c;stroke-width:3;pointer-events:all;cursor:grab;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
 .draft{fill:#0e9f8c1f;stroke:#0b8676;stroke-width:2;stroke-dasharray:6 4;stroke-linejoin:round;pointer-events:none}.draft-point{fill:white;stroke:#0b8676;stroke-width:2;pointer-events:none}
 .rotation-stem{stroke:#0e9f8c;stroke-width:2;pointer-events:none}.rotate-handle{fill:#0e9f8c;stroke:white;stroke-width:2;pointer-events:all;cursor:grab;filter:drop-shadow(0 1px 3px rgba(0,0,0,.35))}.rotation-icon{fill:white;font-size:15px;text-anchor:middle;dominant-baseline:central;pointer-events:none}
@@ -27,7 +28,7 @@ button:disabled,button:disabled:hover{opacity:.38;cursor:default;background:tran
 .leaflet-bar{box-shadow:var(--shadow)!important;border:1px solid var(--line)!important;border-radius:10px!important;overflow:hidden}.leaflet-bar a,.leaflet-bar a:hover{background:var(--solid);color:var(--ink);border-color:var(--line)}.leaflet-bar a:hover{color:var(--accent)}
 .leaflet-control-scale-line{background:var(--card);color:var(--ink);border-color:var(--muted)}
 </style></head><body>
-<div id="map"></div><svg id="overlay"><path id="outline"></path><path id="draft" class="draft"></path><g id="draft-points"></g><g id="handles"></g></svg>
+<div id="map"></div><svg id="overlay"><path id="dem-coverage"><title>本地 DEM 覆盖范围</title></path><path id="outline"></path><path id="draft" class="draft"></path><g id="draft-points"></g><g id="handles"></g></svg>
 <div id="tools" class="chip">
 <button data-tool="pan" class="on" title="移动地图 / 编辑选区（Esc）"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>移动</button>
 <span class="sep"></span>

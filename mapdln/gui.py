@@ -21,6 +21,8 @@ from .config import load,save,redact,SECRETS,Ledger
 from .geometry import make_grid,from_wgs
 from .engine import estimate,Control,fetch_tile,FABDEM_BASE,session_for
 from .server import PreviewServer
+from .sources import get_source,list_sources,credentials_for,secret_values,build_request
+from .local_dem import inspect_dem,snapshot_dem
 
 
 class Jobs(QObject):
@@ -56,19 +58,19 @@ class Bridge(QObject):
         super().__init__(window);self.window=window;self.test=test
     @Slot()
     def pageReady(self):
-        w=self.window;provider=w.test_provider if self.test else w.preview.currentData()
+        w=self.window;provider=w.test_provider if self.test else w.preview_provider()
         view=w.test_view if self.test else w.web
         view.page().runJavaScript("setTheme("+json.dumps(w.theme_dark)+");setSelectionLocked("+json.dumps(False if self.test else w.selection_locked)+");previewProvider("+json.dumps(provider)+")")
     @Slot(str)
     def providerReady(self,system):
         if not self.test:
-            w=self.window;w.display_system=system;w.render_selection()
+            w=self.window;w.display_system=system;w.render_selection();w.render_dem()
             if w.grid:
                 p=w.grid.geographic.centroid
                 w.web.page().runJavaScript('setCenter('+json.dumps(from_wgs([p.x,p.y],system))+')')
     @Slot(str,bool)
     def mapStatus(self,message,ok):
-        w=self.window;text=redact(message,[w.settings.get(k,"") for k in SECRETS])
+        w=self.window;text=redact(message,secret_values({k:w.settings.get(k) for k in SECRETS}))
         if self.test:w.test_status.setText(text);w.test_success=ok
         else:w.map_status.setText(text)
     @Slot(str)
@@ -150,6 +152,21 @@ class FlatInteger(QSpinBox):
         else:event.ignore()
 
 
+class DemDrop(QLineEdit):
+    fileDropped=Signal(str)
+    def __init__(self):
+        super().__init__();self.setReadOnly(True);self.setAcceptDrops(True)
+        self.setPlaceholderText("拖入单波段 GeoTIFF 或选择文件")
+    def dragEnterEvent(self,event):
+        urls=event.mimeData().urls()
+        if self.isEnabled() and len(urls)==1 and urls[0].isLocalFile() and Path(urls[0].toLocalFile()).suffix.lower() in ('.tif','.tiff'):
+            event.acceptProposedAction()
+    def dropEvent(self,event):
+        urls=event.mimeData().urls()
+        if len(urls)==1 and urls[0].isLocalFile():
+            self.fileDropped.emit(urls[0].toLocalFile());event.acceptProposedAction()
+
+
 def combo(items):
     w=FlatCombo()
     for title,value in items:w.addItem(title,value)
@@ -222,11 +239,11 @@ QLabel#health { border-radius: 13px; padding: 5px 12px; font-size: 12px; font-we
 QLabel#health[state="ok"] { background: $tint; color: $accent; }
 QLabel#health[state="warn"] { background: $warn_tint; color: $warn; }
 
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit#sourceEditor {
     background: $field; border: 1px solid $line; border-radius: 8px; padding: 6px 10px; min-height: 20px;
     selection-background-color: $accent; selection-color: $on_accent; }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover { border-color: $strong; }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: $accent; background: $surface; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit#sourceEditor:focus { border-color: $accent; background: $surface; }
 QLineEdit:read-only { color: $muted; }
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { color: $muted; background: $sunken; border-color: $line; }
 QComboBox { padding-right: 30px; }
@@ -288,7 +305,7 @@ class Window(QMainWindow):
         try:self.settings=load()
         except Exception as exc:self.config_error="本机凭据无法解密，请重新保存："+str(exc)
         self.selection=None;self.grid=None;self.plan=None;self.plan_generation=0;self.process=None;self.buffer=b"";self.task_state="idle";self.selection_locked=False
-        self.terrain_failed=False;self.display_system="WGS84";self.test_provider="amap";self.test_success=False;self.fields={};self.card_status={}
+        self.terrain_failed=False;self.display_system="WGS84";self.test_provider="amap";self.test_success=False;self.fields={};self.card_status={};self.dem_info=None;self.dem_generation=0
         self.jobs=Jobs(self)
         assets=resource("web")
         self.server=PreviewServer(assets,lambda:dict(self.settings))
@@ -342,8 +359,15 @@ class Window(QMainWindow):
         side.addWidget(group)
         # 地图与输出参数
         group,body=card("地图与输出","视图缩放、瓦片层级与输出分辨率相互独立；1 米像素不等于 1 米定位精度。");form=form_layout();body.addLayout(form)
-        self.preview=combo([("高德 · 国内推荐","amap"),("百度 · 国内预览","baidu"),("Mapbox · 全球卫星","mapbox")]);self.preview.setCurrentIndex(max(0,self.preview.findData(self.settings.get("preview_provider","amap"))));form_row(form,"预览地图",self.preview)
-        self.elevation=combo([("纯黑平坦 · 0 米","flat"),("真实地形 · FABDEM","real")]);form_row(form,"高程模式",self.elevation)
+        self.export_content=combo([("影像 + 高程",True),("仅高程",False)]);form_row(form,"导出内容",self.export_content)
+        self.imagery_source=combo([(s['name'],s['id']) for s in list_sources(self.settings)]);self.imagery_source.setCurrentIndex(max(0,self.imagery_source.findData(self.settings.get('imagery_source','mapbox'))));form_row(form,"导出影像",self.imagery_source)
+        self.preview=combo([("跟随导出影像","follow"),("高德 · 国内推荐","amap"),("百度 · 国内预览","baidu"),("Mapbox · 全球卫星","mapbox"),("离线坐标预览","offline")]);self.preview.setCurrentIndex(max(0,self.preview.findData(self.settings.get("preview_provider","amap"))));form_row(form,"预览底图",self.preview)
+        self.elevation=combo([("纯黑平坦 · 0 米","flat"),("真实地形 · FABDEM","real"),("本地 DEM","local")]);form_row(form,"高程来源",self.elevation)
+        self.dem_panel=QWidget();dp=QVBoxLayout(self.dem_panel);dp.setContentsMargins(0,0,0,0);dp.setSpacing(6)
+        self.dem_path=DemDrop();self.dem_path.fileDropped.connect(self.set_dem_file);dp.addWidget(self.dem_path)
+        dr=QHBoxLayout();dr.addWidget(button("选择文件",self.choose_dem));dr.addWidget(button("定位到数据",self.locate_dem));dp.addLayout(dr)
+        self.dem_unit=combo([("读取高程单位","auto"),("高程单位：米","m"),("高程单位：英尺","ft")]);dp.addWidget(self.dem_unit)
+        self.dem_status=label("选择带地理参考的单波段 .tif / .tiff",muted=True);dp.addWidget(self.dem_status);form.addWidget(self.dem_panel,form._rows,0,1,2);form._rows+=1;self.dem_panel.hide()
         self.resolution=number(.01,1000,1,2);self.resolution.setSuffix(" m/px");form_row(form,"输出分辨率",self.resolution)
         presets=QHBoxLayout();presets.setSpacing(6);self.resolution_chips={}
         def sync_chips(value):
@@ -351,7 +375,8 @@ class Window(QMainWindow):
         for n in (.5,1,2,5):
             chip=button(f"{n:g} m",lambda _,v=n:(self.resolution.setValue(v),sync_chips(v)),chip=True);chip.setCheckable(True);self.resolution_chips[n]=chip;presets.addWidget(chip)
         self.resolution.valueChanged.connect(sync_chips);sync_chips(self.resolution.value())
-        form_row(form,"",presets);self.zoom=integer(0,22,17);form_row(form,"卫星瓦片层级",self.zoom)
+        form_row(form,"",presets);self.zoom=integer(0,24,17);self.auto_zoom=QCheckBox("按输出分辨率自动选择");self.auto_zoom.setToolTip('关闭后可在高级设置中调整手动瓦片层级');self.auto_zoom.setChecked(True);form_row(form,"影像清晰度",self.auto_zoom);self.zoom.setEnabled(False)
+        body.addWidget(button("管理图源 / 配置密钥",self.manage_sources))
         side.addWidget(group)
         # 额度预判
         budgetgroup,bf=card("下载前额度预判","按实际选区与瓦片相交计算，并扣除有效缓存")
@@ -384,6 +409,7 @@ class Window(QMainWindow):
         opts=QGridLayout();opts.setHorizontalSpacing(12);opts.setVerticalSpacing(10);opts.setColumnStretch(0,1);opts.setColumnStretch(1,1)
         self.concurrency=integer(1,8,4);self.retries=integer(0,10,3);self.connect_timeout=integer(1,120,10);self.read_timeout=integer(1,300,30);self.bits=combo([("16 位",16),("8 位",8)]);self.smooth=number(0,5,0,1)
         for i,(title,field) in enumerate((("并发",self.concurrency),("重试",self.retries),("连接超时 · 秒",self.connect_timeout),("读取超时 · 秒",self.read_timeout),("高度位深",self.bits),("平滑 σ",self.smooth))):grid_field(opts,i//2,i%2,title,field)
+        grid_field(opts,3,0,'手动影像瓦片层级',self.zoom)
         nf.addLayout(opts);av.addWidget(network)
         terminal,lf=card("终端日志","凭据与代理已遮蔽");self.logs=QPlainTextEdit();self.logs.setObjectName("terminal");self.logs.setReadOnly(True);self.logs.setMaximumBlockCount(4000);self.logs.setFixedHeight(190);lf.addWidget(self.logs)
         lr=QHBoxLayout();lr.addWidget(button("复制日志",lambda:QApplication.clipboard().setText(self.logs.toPlainText())));lr.addWidget(button("保存日志",self.save_log));lf.addLayout(lr);av.addWidget(terminal)
@@ -410,12 +436,88 @@ class Window(QMainWindow):
         tl.addLayout(row);cl.addWidget(self.task_card)
         split.addWidget(center);split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([400,1100]);outer.addWidget(split,1)
         self.pages.addWidget(work)
-        self.preview.currentIndexChanged.connect(self.reload_map)
+        self.preview.currentIndexChanged.connect(self.preview_changed)
+        self.imagery_source.currentIndexChanged.connect(self.source_changed)
+        self.export_content.currentIndexChanged.connect(self.source_changed)
+        self.elevation.currentIndexChanged.connect(self.elevation_changed)
+        self.dem_unit.currentIndexChanged.connect(lambda:self.set_dem_file(self.dem_path.text()) if self.dem_path.text() else None)
+        self.auto_zoom.toggled.connect(lambda on:(self.zoom.setEnabled(not on and bool(self.export_content.currentData())),self.replan()))
         for w in (self.resolution,self.zoom,self.reserve):w.valueChanged.connect(self.replan)
 
     def show_advanced(self,on):
         self.advanced.setVisible(on);self.advanced_toggle.setText(("▾  " if on else "▸  ")+ADVANCED_TITLE)
         if on:QTimer.singleShot(0,lambda:self.side_scroll.ensureWidgetVisible(self.coordinate_card))
+
+    def selected_source(self):
+        return get_source(self.settings,self.imagery_source.currentData())
+
+    def preview_provider(self):
+        if not self.export_content.currentData():return 'offline'
+        return 'source:'+self.imagery_source.currentData() if self.preview.currentData()=='follow' else self.preview.currentData()
+
+    def persist_preferences(self):
+        self.settings.update(preview_provider=getattr(self,'preview_before_dem',self.preview.currentData()),imagery_source=self.imagery_source.currentData())
+        try:save({k:v for k,v in self.settings.items() if k!='proxy'})
+        except Exception as exc:self.append_log('保存偏好失败：'+str(exc))
+
+    def preview_changed(self):
+        self.persist_preferences();self.reload_map();self.refresh_quota()
+
+    def source_changed(self):
+        imagery=bool(self.export_content.currentData());self.imagery_source.setEnabled(imagery);self.auto_zoom.setEnabled(imagery);self.zoom.setEnabled(imagery and not self.auto_zoom.isChecked())
+        if not imagery and not hasattr(self,'preview_before_dem'):
+            self.preview_before_dem=self.preview.currentData();self.preview.blockSignals(True);self.preview.setCurrentIndex(self.preview.findData('offline'));self.preview.blockSignals(False)
+            self.server.set_preview_enabled(False);self.reload_map()
+        elif imagery and hasattr(self,'preview_before_dem'):
+            self.preview.blockSignals(True);self.preview.setCurrentIndex(max(0,self.preview.findData(self.preview_before_dem)));self.preview.blockSignals(False);del self.preview_before_dem
+            self.server.set_preview_enabled(True);self.reload_map()
+        self.preview.setEnabled(imagery)
+        self.start.setText('开始下载' if imagery else '开始导出')
+        self.persist_preferences();self.replan();self.update_health();self.refresh_quota()
+        if self.preview.currentData()=='follow':self.reload_map()
+
+    def elevation_changed(self):
+        self.dem_panel.setVisible(self.elevation.currentData()=='local');self.render_dem();self.replan()
+
+    def manage_sources(self):
+        from .source_dialog import SourcesDialog
+        dialog=SourcesDialog(self.settings,self.options(),self)
+        if dialog.exec():
+            old=getattr(dialog,'saved_id',self.imagery_source.currentData());self.settings=dialog.settings
+            self.imagery_source.blockSignals(True);self.imagery_source.clear()
+            for source in list_sources(self.settings):self.imagery_source.addItem(source['name'],source['id'])
+            self.imagery_source.setCurrentIndex(max(0,self.imagery_source.findData(old)));self.imagery_source.blockSignals(False)
+            for key,field in self.fields.items():field.setText(self.settings.get(key,''))
+            self.source_changed()
+
+    def choose_dem(self):
+        path,_=QFileDialog.getOpenFileName(self,'选择本地 DEM',self.dem_path.text(),'GeoTIFF (*.tif *.tiff)')
+        if path:self.set_dem_file(path)
+
+    def set_dem_file(self,path):
+        if not path or self.selection_locked:return
+        self.dem_path.setText(path);self.dem_path.setToolTip(path);self.dem_info=None;self.dem_generation+=1;generation=self.dem_generation;self.render_dem()
+        self.dem_status.setText('正在读取坐标、覆盖范围和高程单位…');self.elevation.setCurrentIndex(self.elevation.findData('local'));self.replan()
+        unit=self.dem_unit.currentData()
+        def complete(info,error):
+            if generation!=self.dem_generation:return
+            if error:self.dem_status.setText('文件不可用：'+str(error));return
+            self.dem_info=info
+            res=info.get('resolution_m',[]);resolution=' × '.join(f'{v:.2f}' for v in res) if res else '未知'
+            self.dem_status.setText(f"{info['width']:,} × {info['height']:,} 像素 · 原始约 {resolution} 米\n{info['crs']}\n"+('请选择高程单位（文件未声明）' if info.get('unit_required') else '高程单位：'+str(info.get('unit')))+'；重采样不会增加地形细节')
+            self.render_dem();self.replan()
+        self.jobs.run(lambda:inspect_dem(path,unit),complete)
+
+    def render_dem(self):
+        points=[]
+        if self.dem_info and self.elevation.currentData()=='local':
+            w,s,e,n=self.dem_info['bounds_wgs84'];points=[from_wgs(p,self.display_system) for p in ((w,s),(e,s),(e,n),(w,n),(w,s))]
+        if hasattr(self,'web'):self.web.page().runJavaScript('window.setDemCoverage&&setDemCoverage('+json.dumps(points)+')')
+
+    def locate_dem(self):
+        if self.dem_info:
+            w,s,e,n=self.dem_info['bounds_wgs84'];points=[from_wgs(p,self.display_system) for p in ((w,s),(e,n))]
+            self.web.page().runJavaScript('window.fitCoverage&&fitCoverage('+json.dumps(points)+')')
 
     def show_estimate(self,result=None,message=""):
         values={}
@@ -436,7 +538,7 @@ class Window(QMainWindow):
     def build_accounts(self):
         page=QScrollArea();page.setWidgetResizable(True);page.setFrameShape(QFrame.Shape.NoFrame);page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);content=QWidget();layout=QVBoxLayout(content);layout.setContentsMargins(4,4,12,4);layout.setSpacing(14)
         intro=QVBoxLayout();intro.setSpacing(4);intro.addWidget(label("账户配置",False,"pageTitle"))
-        intro.addWidget(label("下载需要 Mapbox；预览平台按需配置。凭据使用当前 Windows 用户加密保存，任务使用启动时的配置。",muted=True));layout.addLayout(intro)
+        intro.addWidget(label("按所选图源配置凭据；仅高程导出无需影像凭据。凭据由当前 Windows 用户加密保存，任务使用启动时的配置。",muted=True));intro.addWidget(button("天地图与自定义图源",self.manage_sources));layout.addLayout(intro)
         self.account_cards={};self.account_grid=cards=QGridLayout();cards.setHorizontalSpacing(14);cards.setVerticalSpacing(14);cards.setColumnStretch(0,1);cards.setColumnStretch(1,1);layout.addLayout(cards)
         for i,(platform,(title,fields,console,docs,guide)) in enumerate(GUIDES.items()):
             card_frame,body=card(title,CAPTIONS[platform]);self.account_cards[platform]=card_frame;form=QGridLayout();form.setHorizontalSpacing(14);form.setVerticalSpacing(10);form.setColumnStretch(0,1);form.setColumnStretch(1,1)
@@ -480,7 +582,7 @@ class Window(QMainWindow):
         if platform=="mapbox" and data.get("mapbox_token") and not data["mapbox_token"].startswith("pk."):self.card_status[platform].setText("请输入 pk. 公共 Token");return
         try:
             save(data);data["proxy"]=self.proxy.text().strip();self.settings=data;self.dirty(platform);self.update_health()
-            if self.preview.currentData()==platform:self.reload_map()
+            if self.preview_provider() in (platform,'source:'+platform):self.reload_map()
         except Exception as exc:self.card_status[platform].setText("保存失败："+str(exc))
     def delete_platform(self,platform):
         data={k:v for k,v in self.settings.items() if k!="proxy"}
@@ -489,11 +591,18 @@ class Window(QMainWindow):
             save(data);data["proxy"]=self.proxy.text().strip();self.settings=data
             for key,_,_ in GUIDES[platform][1]:self.fields[key].clear()
             self.dirty(platform);self.update_health()
-            if self.preview.currentData()==platform:self.reload_map()
+            if self.preview_provider() in (platform,'source:'+platform):self.reload_map()
         except Exception as exc:self.card_status[platform].setText("删除失败："+str(exc))
     def update_health(self):
-        ok=bool(self.settings.get("mapbox_token"))
-        self.health.setText("● 下载凭据已配置" if ok else "● 请配置 Mapbox Token");self.health.setProperty("state","ok" if ok else "warn");repolish(self.health)
+        ok=True;message='● 仅高程导出'
+        if self.export_content.currentData():
+            source=self.selected_source();credential=credentials_for(self.settings,source['id'])
+            try:
+                import mercantile
+                build_request(source,mercantile.Tile(0,0,source['min_zoom']),credential)
+                message='● '+source['name']
+            except Exception:ok=False;message='● 请配置所选图源凭据'
+        self.health.setText(message);self.health.setProperty("state","ok" if ok else "warn");repolish(self.health)
         if self.plan:self.start.setEnabled(not self.running())
     def test_platform(self,platform):
         if any(self.fields[k].text().strip()!=self.settings.get(k,"") for k,_,_ in GUIDES[platform][1]):self.card_status[platform].setText("请先保存编辑，再测试已保存配置");return
@@ -516,10 +625,12 @@ class Window(QMainWindow):
         except Exception as exc:self.quota_status.setText("保存失败："+str(exc))
     def refresh_quota(self):
         if not hasattr(self,"quota_status"):return
-        counts=Ledger().counts();since=Ledger().counts(self.settings.get("quota_updated",""));recorded=sum(since.get(k,0) for k in ("download","preview","verify"));q=int(self.settings.get("quota",0));used=int(self.settings.get("usage",0));update=self.settings.get("quota_updated","尚未更新")
-        self.preview_usage.setText(f"本机 Mapbox 预览已发起 {counts['preview']} 次\n"+("当前为高德 / 百度，预览不产生 Mapbox 请求" if self.preview.currentData()!='mapbox' else "当前底图为 Mapbox；有效缓存可供导出复用"))
+        counts=Ledger().counts(source='mapbox');since=Ledger().counts(self.settings.get("quota_updated",""),source='mapbox');recorded=sum(since.get(k,0) for k in ("download","preview","verify"));q=int(self.settings.get("quota",0));used=int(self.settings.get("usage",0));update=self.settings.get("quota_updated","尚未更新")
+        selected=Ledger().counts(source=self.imagery_source.currentData());self.preview_usage.setText(f"{self.imagery_source.currentText()} · 本机下载 {selected['download']} / 预览 {selected['preview']} / 验证 {selected['verify']} 次")
         self.quota_status.setText(f"本机：下载 {counts['download']} / 预览 {counts['preview']} / 验证 {counts['verify']}；其中重试 {counts['retry']}\n手动更新：{update}；周期：{self.settings.get('cycle','未填写')}")
-        if not q:self.balance_label.setText("账户剩余额度未知；请在账户页手动更新")
+        if not self.export_content.currentData():self.balance_label.setText('仅高程：不请求影像瓦片')
+        elif self.imagery_source.currentData()!='mapbox':self.balance_label.setText('所选平台剩余额度未知；请以平台控制台为准')
+        elif not q:self.balance_label.setText("Mapbox 剩余额度未知；可在账户页手动更新")
         else:
             remaining=max(0,q-used-recorded);required=self.plan.get("with_retry_reserve",0) if self.plan else 0
             self.balance_label.setText(f"参考剩余 {remaining:,} 次\n"+("预计超出已录入额度，请核对控制台" if required>remaining else "预估在已录入额度内")+"\n非实时全账户余额，其他设备用量未知")
@@ -557,14 +668,22 @@ class Window(QMainWindow):
         if self.selection:self.debounce.start()
     def calculate(self):
         if not self.selection:return
-        selection=json.loads(json.dumps(self.selection));res=self.resolution.value();zoom=self.zoom.value();reserve=self.reserve.value();generation=self.plan_generation;self.estimate_label.setText("正在检查网格、瓦片相交与有效缓存…")
+        selection=json.loads(json.dumps(self.selection));res=self.resolution.value();zoom=None if self.auto_zoom.isChecked() else self.zoom.value();reserve=self.reserve.value();generation=self.plan_generation;self.estimate_label.setText("正在检查网格、瓦片相交与有效缓存…")
+        source=self.selected_source();credentials=credentials_for(self.settings,source['id']);imagery=bool(self.export_content.currentData())
+        if self.elevation.currentData()=='local':
+            if not self.dem_info:self.show_estimate(None,'请先选择有效的本地 DEM');return
+            try:snapshot_dem(self.dem_path.text(),self.dem_unit.currentData())
+            except Exception as exc:self.show_estimate(None,str(exc));return
         def complete(result,error):
             if generation!=self.plan_generation:return
             if error:self.show_estimate(None,str(error));return
             self.plan=result;self.grid=make_grid(selection,res);self.render_selection()
             self.show_estimate(result)
+            if imagery and result.get('zoom') is not None:
+                self.zoom.blockSignals(True);self.zoom.setValue(result['zoom']);self.zoom.blockSignals(False)
+                self.estimate_label.setText(self.estimate_label.text()+f"\n{source['name']} · 层级 {result['zoom']} · 原始像素约 {result.get('native_resolution_m',0):.2f} 米")
             self.start.setEnabled(not self.running());self.refresh_quota()
-        self.jobs.run(lambda:estimate(selection,res,zoom,reserve),complete)
+        self.jobs.run(lambda:estimate(selection,res,zoom,reserve,source=source,imagery=imagery,credentials=credentials),complete)
     def choose_output(self):
         path=QFileDialog.getExistingDirectory(self,"选择输出位置",self.output.text())
         if path:self.output.setText(path)
@@ -574,25 +693,37 @@ class Window(QMainWindow):
         return self.process is not None and self.process.state()!=QProcess.ProcessState.NotRunning
     def set_selection_locked(self,locked):
         self.selection_locked=bool(locked);self.coordinate_card.setEnabled(not locked)
+        for widget in (self.export_content,self.imagery_source,self.elevation,self.dem_panel,self.resolution,self.auto_zoom,self.zoom):widget.setEnabled(not locked)
+        for chip in self.resolution_chips.values():chip.setEnabled(not locked)
+        if not locked:
+            self.imagery_source.setEnabled(bool(self.export_content.currentData()));self.zoom.setEnabled(bool(self.export_content.currentData()) and not self.auto_zoom.isChecked())
+        self.preview.setEnabled(bool(self.export_content.currentData()))
         self.web.page().runJavaScript("setSelectionLocked("+json.dumps(self.selection_locked)+")")
         if locked:
             self.plan_generation+=1;self.debounce.stop()
     def start_task(self,override=None):
         if self.running():return
-        if not self.settings.get("mapbox_token"):self.navigate(1);self.card_status["mapbox"].setText("开始下载需要保存公共 Token；选区和参数已保留");return
         if override is None:
             if not self.plan or not self.selection:return
             name=self.name.text().strip()
             if not name or any(c in name for c in '<>:"/\\|?*') or name.endswith((" ",".")) or name in (".",".."):self.stage.setText("任务名包含 Windows 路径特殊字符");return
-            task={"selection":json.loads(json.dumps(self.selection)),"resolution":self.resolution.value(),"zoom":self.zoom.value(),"elevation":self.elevation.currentData(),"output":str(Path(self.output.text())/name),"task_id":uuid.uuid4().hex,"budget":self.budget.value(),"options":self.options()}
+            task={"selection":json.loads(json.dumps(self.selection)),"resolution":self.resolution.value(),"zoom":None if self.auto_zoom.isChecked() else self.zoom.value(),"elevation":self.elevation.currentData(),"output":str(Path(self.output.text())/name),"task_id":uuid.uuid4().hex,"budget":self.budget.value(),"options":self.options(),"source":self.selected_source(),"imagery":bool(self.export_content.currentData())}
+            credentials=credentials_for(self.settings,task['source']['id']) if task['imagery'] else {}
+            try:
+                if task['elevation']=='local':task['dem']=snapshot_dem(self.dem_path.text(),self.dem_unit.currentData())
+                if task['imagery']:
+                    import mercantile
+                    build_request(task['source'],mercantile.tile(self.grid.geographic.centroid.x,self.grid.geographic.centroid.y,self.plan['zoom']),credentials)
+            except Exception as exc:self.stage.setText(str(exc));return
+            self.active_credentials=json.loads(json.dumps(credentials))
         else:
             task=override
             self.selection=json.loads(json.dumps(task['selection']));self.grid=make_grid(self.selection,task['resolution']);self.render_selection()
-        self.active_task=task;self.terrain_failed=False;self.flat_retry.hide();self.buffer=b"";self.task_state="running";self.set_selection_locked(True);self.logs.appendPlainText("启动独立后台任务；Token 通过 stdin 传递，代理不写入任务元数据。")
+        self.active_task=task;self.terrain_failed=False;self.flat_retry.hide();self.buffer=b"";self.task_state="running";self.set_selection_locked(True);self.logs.appendPlainText("启动独立后台任务；凭据通过 stdin 传递，任务固定使用启动时的图源与参数。")
         self.process=QProcess(self);self.process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels);self.process.readyReadStandardOutput.connect(self.read_worker);self.process.readyReadStandardError.connect(self.read_errors);self.process.finished.connect(self.worker_finished);self.process.errorOccurred.connect(self.worker_error)
         if getattr(sys,"frozen",False):program=sys.executable;args=["--worker"]
         else:program=sys.executable;args=[str(Path(__file__).resolve().parent.parent/"main.py"),"--worker"]
-        payload=(json.dumps({"task":task,"token":self.settings["mapbox_token"]},ensure_ascii=False)+"\n").encode("utf-8")
+        payload=(json.dumps({"task":task,"token":self.active_credentials},ensure_ascii=False)+"\n").encode("utf-8")
         self.process.started.connect(lambda:self.process.write(payload));self.process.start(program,args);self.start.setEnabled(False);self.pause.setEnabled(True);self.cancel.setEnabled(True);self.resume.setEnabled(False);self.stage.setText("启动后台任务…")
     def read_worker(self):
         self.buffer+=bytes(self.process.readAllStandardOutput())
@@ -613,7 +744,7 @@ class Window(QMainWindow):
             state=event.get("state","");self.task_state=state;self.stage.setText(event.get("message",state));self.pause.setEnabled(state=="running");self.resume.setEnabled(state in ("paused","budget"))
         elif kind=="terrain_failed":self.terrain_failed=True;self.append_log(event.get("message",""))
         elif kind=="error":self.task_state="failed";self.stage.setText(event["message"]);self.append_log(event["message"])
-        elif kind=="done":self.task_state="done";self.last_output=event["output"];self.stage.setText("完成 · 卫星 / 高度 / 掩膜等成果已导出");self.stage.setToolTip(event["output"]);self.progress.setRange(0,100);self.progress.setValue(100);self.append_log("输出目录："+event["output"])
+        elif kind=="done":self.task_state="done";self.last_output=event["output"];self.stage.setText("完成 · 所选影像 / 高程 / 掩膜成果已导出");self.stage.setToolTip(event["output"]);self.progress.setRange(0,100);self.progress.setValue(100);self.append_log("输出目录："+event["output"])
         elif kind=="log":self.append_log(event.get("message",""))
     def worker_finished(self,code,status):
         self.read_worker();self.read_errors()
@@ -629,7 +760,7 @@ class Window(QMainWindow):
         text=bytes(self.process.readAllStandardError()).decode("utf-8",errors="replace").strip()
         if text:self.append_log(text)
     def append_log(self,text):
-        self.logs.appendPlainText(redact(text,[self.settings.get(k,"") for k in SECRETS]+[self.proxy.text().strip()]))
+        self.logs.appendPlainText(redact(text,secret_values({k:self.settings.get(k) for k in SECRETS})+secret_values(getattr(self,'active_credentials',{}))+[self.proxy.text().strip()]))
     def command(self,action):
         if self.running():
             command={"action":action}

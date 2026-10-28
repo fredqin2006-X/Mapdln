@@ -10,6 +10,7 @@ import requests
 import mercantile
 from .config import Ledger
 from .engine import Control, fetch_tile, session_for, FABDEM_BASE
+from .sources import get_source,list_sources,credentials_for,secret_values,cache_key
 
 
 class PreviewServer:
@@ -18,6 +19,8 @@ class PreviewServer:
         self.settings=settings
         self.cap=secrets.token_urlsafe(24)
         self.last_mapbox_error=""
+        self.source_errors={}
+        self.preview_controls={};self.preview_lock=threading.Lock();self.preview_enabled=True
         self.seen=[]
         self.sent=[]
         owner=self
@@ -58,13 +61,19 @@ class PreviewServer:
                     if origin and origin != owner.origin or not ref.startswith(owner.url):
                         return self.response(403,b"{}")
                 try:
+                    if path.startswith(('tiles/','source-tiles/')) and not owner.preview_enabled:
+                        return self.response(409,b'{"error":"preview disabled"}')
                     if path=="config":
                         c=owner.settings()
                         data={"amap_key":c.get("amap_key",""),"baidu_ak":c.get("baidu_ak",""),"mapbox_available":bool(c.get("mapbox_token")),
                               "amap_service":owner.origin+"/_AMapService/"+owner.cap}
+                        data['sources']=[{k:s[k] for k in ('id','name','min_zoom','max_zoom','tile_size','attribution')} for s in list_sources(c)]
                         return self.response(200,json.dumps(data).encode())
                     if path=="mapbox-status":
                         return self.response(200,json.dumps({"error":owner.last_mapbox_error}).encode())
+                    if path.startswith('source-status/'):
+                        source_id=path.split('/',1)[1];get_source(owner.settings(),source_id)
+                        return self.response(200,json.dumps({'error':owner.source_errors.get(source_id,'')}).encode())
                     if path=="sdk/amap.js":
                         c=owner.settings()
                         with session_for(c) as session:
@@ -80,10 +89,26 @@ class PreviewServer:
                         if not c.get("mapbox_token"):
                             return self.response(401,b"{}")
                         options={"proxy":c.get("proxy",""),"retries":0,"connect_timeout":10,"read_timeout":20}
-                        control=Control(lambda *a,**k:None)
-                        p=fetch_tile(mercantile.Tile(x,y,z),c["mapbox_token"],options,control,Ledger(),"preview")
+                        source=get_source(c,'mapbox');credential=credentials_for(c,'mapbox');control,gate=owner.preview_context(source,credential)
+                        with gate:p=fetch_tile(mercantile.Tile(x,y,z),credential,options,control,Ledger(),"preview",source=source)
                         owner.last_mapbox_error=""
                         return self.response(200,p.read_bytes(),"image/jpeg")
+                    if path.startswith('source-tiles/'):
+                        source_id,z,x,y=path.split('/')[1:]
+                        z,x,y=int(z),int(x),int(y.split('.')[0]);c=owner.settings();source=get_source(c,source_id)
+                        if not source['min_zoom']<=z<=source['max_zoom'] or not 0<=x<2**z or not 0<=y<2**z:return self.response(400,b'{}')
+                        credential=credentials_for(c,source_id);options={'proxy':c.get('proxy',''),'retries':0,'connect_timeout':10,'read_timeout':20}
+                        try:
+                            control,gate=owner.preview_context(source,credential)
+                            with gate:p=fetch_tile(mercantile.Tile(x,y,z),credential,options,control,Ledger(),'preview',source=source)
+                            owner.source_errors[source_id]=''
+                            from PIL import Image
+                            with Image.open(p) as img:mime='image/png' if img.format=='PNG' else 'image/jpeg'
+                            return self.response(200,p.read_bytes(),mime)
+                        except Exception as exc:
+                            from .config import redact
+                            owner.source_errors[source_id]=redact(exc,secret_values(credential))
+                            return self.response(502,json.dumps({'error':owner.source_errors[source_id]},ensure_ascii=False).encode())
                     if path.startswith("_AMapService/"):
                         rest=path[len("_AMapService/"):]
                         # Official documented routes only; reject arbitrary hosts/paths.
@@ -107,7 +132,7 @@ class PreviewServer:
                     return self.response(404,b"{}")
                 except Exception as exc:
                     from .config import redact,SECRETS
-                    owner.last_mapbox_error=redact(str(exc),[owner.settings().get(k,"") for k in SECRETS])
+                    owner.last_mapbox_error=redact(str(exc),secret_values({k:owner.settings().get(k) for k in SECRETS}))
                     return self.response(502,json.dumps({"error":owner.last_mapbox_error},ensure_ascii=False).encode())
         try:
             self.http=ThreadingHTTPServer(("127.0.0.1",8765),Handler)
@@ -118,6 +143,22 @@ class PreviewServer:
         self.url=self.origin+"/"+self.cap+"/"
         threading.Thread(target=self.http.serve_forever,daemon=True).start()
 
+    def preview_context(self,source,credentials):
+        key=cache_key(source,credentials)
+        with self.preview_lock:
+            if not self.preview_enabled:raise RuntimeError('仅高程模式已暂停在线影像预览')
+            if key not in self.preview_controls:
+                self.preview_controls[key]=(Control(lambda *a,**k:None),threading.BoundedSemaphore(source.get('max_concurrency',4)))
+            return self.preview_controls[key]
+
+    def set_preview_enabled(self,enabled):
+        with self.preview_lock:
+            self.preview_enabled=bool(enabled)
+            if not enabled:
+                for control,_ in self.preview_controls.values():control.command('cancel')
+                self.preview_controls.clear()
+
     def close(self):
+        self.set_preview_enabled(False)
         self.http.shutdown()
         self.http.server_close()

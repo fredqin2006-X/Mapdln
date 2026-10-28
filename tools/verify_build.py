@@ -50,7 +50,8 @@ def inspect_archive(exe, max_mib):
         for prefix in ('scipy', 'pytest', '_pytest', 'shapely.tests', 'rasterio.tests', 'pyproj.tests'))]
     if forbidden:
         raise RuntimeError(f'Unwanted bundled files/modules: {forbidden[:20]}')
-    for name in ('mapdln', 'mapdln.gui', 'mapdln.engine', 'mapdln.worker', 'mapdln.server'):
+    for name in ('mapdln', 'mapdln.gui', 'mapdln.engine', 'mapdln.worker', 'mapdln.server',
+                 'mapdln.sources', 'mapdln.local_dem', 'mapdln.source_dialog'):
         if name not in pyz.toc:
             raise RuntimeError(f'Missing application module: {name}')
     if __version__ not in pyz.extract('mapdln').co_consts:
@@ -124,9 +125,71 @@ def smoke_worker(exe):
         metadata = json.loads((output / 'metadata.json').read_text(encoding='utf-8'))
         assert metadata['local_mapbox_requests'] == 0
         assert (output / 'boundary.geojson').is_file()
+
+        # Local-only export must run without account configuration or HTTP.
+        from mapdln.local_dem import snapshot_dem
+        dem_file = folder / '本地 高程.tif'
+        raw = np.full((grid.height, grid.width), -9999, dtype='float32')
+        raw[:, grid.width//3:2*grid.width//3] = 0
+        raw[:, 2*grid.width//3:] = 100
+        with rasterio.open(dem_file, 'w', driver='GTiff', count=1, width=grid.width,
+                           height=grid.height, crs=grid.crs, transform=grid.transform, dtype='float32') as dst:
+            dst.write(raw, 1)
+            dst.scales = (2.,)
+            dst.offsets = (5.,)
+            dst.set_band_unit(1, 'ft')
+        local_output = folder / '本地 高程成果'
+        local_task = {'selection': selection, 'resolution': 2, 'imagery': False,
+                      'elevation': 'local', 'dem': snapshot_dem(dem_file), 'output': str(local_output)}
+        local_result = subprocess.run(
+            [str(exe), '--worker'], input=json.dumps({'task': local_task, 'token': {}})+'\n',
+            cwd=folder, env=env, capture_output=True, text=True, encoding='utf-8', timeout=90,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        if local_result.returncode:
+            raise RuntimeError(f'Frozen local DEM worker failed: {local_result.stderr}\n{local_result.stdout}')
+        with rasterio.open(local_output/'dem.tif') as dataset, rasterio.open(local_output/'mask.png') as mask:
+            selected = mask.read(1)>0
+            assert np.allclose(dataset.read(1)[selected], ((raw*2+5)*.3048)[selected])
+            assert np.isnan(dataset.nodata)
+            assert np.isnan(dataset.read(1)[~selected]).all()
+        assert not (local_output/'satellite.png').exists()
+        local_meta = json.loads((local_output/'metadata.json').read_text(encoding='utf-8'))
+        assert local_meta['local_source_requests'] == 0 and local_meta['imagery_source'] is None
+
+        # Exercise source-specific 512px PNG caches and alpha in the frozen runtime.
+        from mapdln.sources import validate_source
+        custom = validate_source({'id': 'build-png', 'name': '构建验证影像', 'protocol': 'xyz',
+                                  'url_template': 'https://example.invalid/{z}/{x}/{y}.png',
+                                  'tile_size': 512, 'format': 'PNG'})
+        try:
+            os.environ['MAPDLN_HOME'] = str(profile)
+            for tile in tiles_for(grid, 17):
+                path = tile_path(tile, custom, {})
+                path.parent.mkdir(parents=True, exist_ok=True)
+                Image.new('RGBA', (512,512), (30,120,190,128)).save(path, 'PNG')
+        finally:
+            if previous is None:
+                os.environ.pop('MAPDLN_HOME', None)
+            else:
+                os.environ['MAPDLN_HOME'] = previous
+        custom_output = folder/'自定义 影像成果'
+        custom_task = {**task, 'source': custom, 'output': str(custom_output)}
+        custom_result = subprocess.run(
+            [str(exe), '--worker'], input=json.dumps({'task': custom_task, 'token': {}})+'\n',
+            cwd=folder, env=env, capture_output=True, text=True, encoding='utf-8', timeout=90,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        if custom_result.returncode:
+            raise RuntimeError(f'Frozen custom source worker failed: {custom_result.stderr}\n{custom_result.stdout}')
+        with rasterio.open(custom_output/'satellite.png') as sat, rasterio.open(custom_output/'mask.png') as mask:
+            selected=mask.read(1)>0
+            assert (sat.read(4)[selected]==128).all()
+            assert (sat.read(4)[~selected]==0).all()
+        custom_meta=json.loads((custom_output/'metadata.json').read_text(encoding='utf-8'))
+        assert custom_meta['imagery_source']['id']=='build-png' and custom_meta['local_source_requests']==0
         return {'passed': True, 'shape': 'circle', 'pixels': [grid.width, grid.height],
                 'resolution_m': 2, 'mapbox_requests': 0, 'isolated_profile': True,
-                'system_only_path': True, 'unicode_working_directory': True}
+                'system_only_path': True, 'unicode_working_directory': True,
+                'local_dem_units_scale_nodata': True, 'custom_source_png512_alpha': True}
 
 
 def main():

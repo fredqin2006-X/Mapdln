@@ -10,4 +10,6 @@ Mapdln application code retains the original MIT license in LICENSE.
 
 Online map services are not redistributed as application source. Mapbox imagery remains © Mapbox / Maxar / respective providers; OpenStreetMap attribution is displayed where used. AMap (高德) and Baidu (百度) maps retain SDK attribution and require suitable developer API authorization.
 
+Tianditu imagery remains © 天地图 / respective data providers. The application supports its documented WMTS image service using the user's own Key: https://lbs.tianditu.gov.cn/server/MapService.html . Custom XYZ/TMS/WMTS endpoints and local DEM files retain their original ownership and license; source attribution is included in exported metadata. An endpoint being technically accessible does not grant additional data rights. No Tencent or Jilin-1 imagery endpoint or data is bundled as an export source.
+
 FABDEM V1-2 is approximately 30 m elevation data from University of Bristol under CC BY-NC-SA 4.0: https://research-information.bris.ac.uk/en/datasets/fabdem-v1-2/ . Usage of downloaded data follows its provider terms independently of the application's MIT license. No user credentials or licensed map imagery are bundled in the application download.

@@ -218,8 +218,8 @@ def make_grid(selection, resolution=1):
 
 def tiles_for(grid, zoom):
     z = int(zoom)
-    if not 0 <= z <= 22:
-        raise ValueError("卫星层级应为 0–22")
+    if not 0 <= z <= 24:
+        raise ValueError("影像层级应为 0–24")
     lat = grid.geographic.centroid.y
     margin = max(grid.resolution*2, 2*40075016.686*math.cos(math.radians(lat))/(256*2**z))
     fwd = Transformer.from_crs(4326, grid.crs, always_xy=True)

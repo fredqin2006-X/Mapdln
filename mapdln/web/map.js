@@ -4,6 +4,7 @@
 let bridge=null, map=null, provider='amap', system='GCJ02', config={}, tool='pan';
 let controls=[],boundary=[],draft=[],shape='polygon',drag=null,mapReady=false,loadId=0;
 let circleRadius=0;
+let demCoverage=[];
 let rectangle=null,hover=null,navigationDrag=null,pendingSubmit=null,submitFrame=0,selectionLocked=false;
 const svg=document.getElementById('overlay'),status=document.getElementById('status'),hint=document.getElementById('hint');
 const outline=document.getElementById('outline'),handles=document.getElementById('handles'),draftLine=document.getElementById('draft');
@@ -63,6 +64,7 @@ function paintDraft(){
 }
 function paint(){
  if(!map)return;
+ const dem=document.getElementById('dem-coverage');if(dem)dem.setAttribute('d',path(demCoverage.map(pixel),true));
  const points=boundary.map(pixel);outline.setAttribute('d',points.length?'M'+points.map(p=>p.x+','+p.y).join('L')+'Z':'');
  handles.replaceChildren();
  controls.forEach((p,i)=>{const q=pixel(p);svgElement('circle',{cx:q.x,cy:q.y,r:6,class:'handle','data-index':i});});
@@ -88,6 +90,8 @@ window.setSelectionLocked=function(locked){
  setTool('pan');
 };
 window.setCenter=function(p){if(!map)return;if(provider==='amap')map.setCenter(p);else if(provider==='baidu')map.panTo(new BMapGL.Point(...p));else map.setView([p[1],p[0]],map.getZoom());};
+window.setDemCoverage=function(points){demCoverage=points||[];paint();};
+window.fitCoverage=function(points){if(!map||points.length!==2)return;if(provider==='amap')map.setBounds(new AMap.Bounds(points[0],points[1]));else if(provider==='baidu')map.setViewport(points.map(p=>new BMapGL.Point(...p)));else map.fitBounds(points.map(p=>[p[1],p[0]]),{padding:[30,30]});};
 window.previewProvider=async function(p){
  provider=p;mapReady=false;const id=++loadId;report('加载地图…');
  try{
@@ -115,14 +119,19 @@ window.previewProvider=async function(p){
    map=new BMapGL.Map('map');map.centerAndZoom(new BMapGL.Point(121.5993,31.2633),15);map.enableScrollWheelZoom();map.addControl(new BMapGL.ScaleControl());
    map.addEventListener('tilesloaded',()=>{const first=!mapReady;mapReady=true;report('百度地图已加载 · BD-09 → WGS84 转换用于下载',true);if(first&&bridge)bridge.providerReady(system);paint();});
    ['moving','zoomend','resize'].forEach(e=>map.addEventListener(e,paint));
+  }else if(p==='offline'){
+   map=leafletMap();L.control.scale({imperial:false}).addTo(map);mapReady=true;report('离线坐标预览 · 不请求在线影像',true);map.on('move zoom resize',paint);if(bridge)bridge.providerReady(system);
   }else{
-   if(!config.mapbox_available)throw new Error('请到账户配置页保存 Mapbox 公共 Token');
+   const sourceId=p.startsWith('source:')?p.slice(7):'mapbox';
+   const source=(config.sources||[]).find(s=>s.id===sourceId);if(!source)throw new Error('图源已删除，请重新选择导出影像');
+   if(sourceId==='mapbox'&&!config.mapbox_available)throw new Error('请到账户配置页保存 Mapbox 公共 Token');
    map=leafletMap();
-   const layer=L.tileLayer(base+'tiles/{z}/{x}/{y}.jpg',{maxZoom:22,attribution:'© Mapbox © Maxar © OpenStreetMap'}).addTo(map);
+   const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+   const layer=L.tileLayer(base+'source-tiles/'+encodeURIComponent(sourceId)+'/{z}/{x}/{y}',{minZoom:source.min_zoom,maxZoom:24,maxNativeZoom:source.max_zoom,attribution:escape(source.attribution)}).addTo(map);
    L.control.scale({imperial:false}).addTo(map);
    let errors=0;
-   layer.on('tileerror',async()=>{errors++;const s=await(await fetch(base+'mapbox-status')).json();report(s.error||'Mapbox 预览瓦片加载失败，请检查 Token 或下载代理');});
-   layer.on('load',()=>{if(!errors){const first=!mapReady;mapReady=true;report('Mapbox 卫星预览 · WGS84；预览请求计入本机记录',true);if(first&&bridge)bridge.providerReady(system);}paint();});
+   layer.on('tileerror',async()=>{errors++;const s=await(await fetch(base+'source-status/'+encodeURIComponent(sourceId))).json();report(s.error||source.name+' 预览失败，请检查凭据与网络');});
+   layer.on('load',()=>{if(!errors){const first=!mapReady;mapReady=true;report(source.name+' · 预览请求计入该图源本机记录',true);if(first&&bridge)bridge.providerReady(system);}paint();});
    map.on('move zoom resize',paint);
   }
   setPan(tool==='pan');
