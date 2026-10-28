@@ -47,7 +47,7 @@ def cli():
     p.add_argument("--shape",choices=["rectangle","circle","polygon","curve"],default="rectangle")
     p.add_argument("--radius",type=float,default=100);p.add_argument("--selection",help="选区 JSON 文件，points+system+shape")
     p.add_argument("-z","--zoom",type=zoom_value,default=None,help="影像层级：auto（默认）或整数");p.add_argument("--resolution",type=float,default=1)
-    p.add_argument("--source",default="mapbox",help="图源管理中保存的图源 ID，内置 mapbox / tianditu")
+    p.add_argument("--source",default="mapbox",help="图源管理中保存的图源 ID，内置 mapbox / tianditu / tencent / jilin")
     p.add_argument("--elevation",choices=["flat","real","local"],default="real")
     p.add_argument("--dem",help="本地单波段 GeoTIFF；指定后使用 local 高程模式")
     p.add_argument("--dem-unit",choices=["auto","m","ft"],default="auto",help="高程单位；文件未注明时需明确选择 m 或 ft")

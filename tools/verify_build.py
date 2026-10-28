@@ -186,10 +186,48 @@ def smoke_worker(exe):
             assert (sat.read(4)[~selected]==0).all()
         custom_meta=json.loads((custom_output/'metadata.json').read_text(encoding='utf-8'))
         assert custom_meta['imagery_source']['id']=='build-png' and custom_meta['local_source_requests']==0
+        # Both provider branches must work with only the frozen runtime on PATH.
+        from mapdln.sources import get_source
+        for provider,fmt,color,credentials in (
+            ('tencent','PNG',(60,150,100,128),{}),
+            ('jilin','WEBP',(40,110,180,96),{'token':'build-only-tk','credential_1':'build-only-mk'}),
+        ):
+            source=get_source({},provider)
+            try:
+                os.environ['MAPDLN_HOME']=str(profile)
+                for tile in tiles_for(grid,17,source['datum']):
+                    path=tile_path(tile,source,credentials)
+                    path.parent.mkdir(parents=True,exist_ok=True)
+                    image=Image.new('RGBA',(256,256),color)
+                    image.save(path,fmt,**({'lossless':True} if fmt=='WEBP' else {}))
+                    if credentials:
+                        assert not tile_path(tile,source,{'token':'different-account','credential_1':'build-only-mk'}).exists()
+            finally:
+                if previous is None:os.environ.pop('MAPDLN_HOME',None)
+                else:os.environ['MAPDLN_HOME']=previous
+            provider_output=folder/(provider+' 独立导出')
+            provider_task={**task,'source':source,'output':str(provider_output)}
+            result=subprocess.run(
+                [str(exe),'--worker'],input=json.dumps({'task':provider_task,'token':credentials})+'\n',
+                cwd=folder,env=env,capture_output=True,text=True,encoding='utf-8',timeout=90,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+            if result.returncode:
+                raise RuntimeError(f'Frozen {provider} worker failed: {result.stderr}\n{result.stdout}')
+            with rasterio.open(provider_output/'satellite.png') as sat,rasterio.open(provider_output/'mask.png') as mask,rasterio.open(provider_output/'dem.tif') as dem:
+                selected=mask.read(1)>0
+                assert sat.crs==dem.crs and sat.transform==dem.transform==grid.transform
+                assert (sat.read(4)[selected]==color[3]).all() and not sat.read()[:,~selected].any()
+                assert np.all(sat.read()[:3,selected]==np.array(color[:3])[:,None])
+            metadata=(provider_output/'metadata.json').read_text(encoding='utf-8')
+            provider_meta=json.loads(metadata)
+            assert provider_meta['imagery_source']['id']==provider and provider_meta['local_source_requests']==0
+            assert not any(value in metadata for value in credentials.values())
+            if provider=='tencent':assert 'local approximate conversion' in provider_meta['imagery_georeferencing']
         return {'passed': True, 'shape': 'circle', 'pixels': [grid.width, grid.height],
                 'resolution_m': 2, 'mapbox_requests': 0, 'isolated_profile': True,
                 'system_only_path': True, 'unicode_working_directory': True,
-                'local_dem_units_scale_nodata': True, 'custom_source_png512_alpha': True}
+                'local_dem_units_scale_nodata': True, 'custom_source_png512_alpha': True,
+                'tencent_gcj_grid_alpha':True,'jilin_webp_credentials_grid':True}
 
 
 def main():

@@ -29,6 +29,27 @@ def wgs_to_gcj(lon, lat):
     return lon + dn, lat + dl
 
 
+def wgs_to_gcj_array(lon, lat):
+    """Vectorized local GCJ approximation, with the same boundary as the UI."""
+    lon, lat = np.broadcast_arrays(np.asarray(lon, dtype="float64"), np.asarray(lat, dtype="float64"))
+    inside = (lon > 72.004) & (lon < 137.8347) & (lat > .8293) & (lat < 55.8271)
+    # Evaluate only mainland coordinates: polar inputs must remain finite identity.
+    result_lon, result_lat = lon.copy(), lat.copy()
+    x, y = lon[inside] - 105, lat[inside] - 35
+    dl = -100 + 2*x + 3*y + .2*y*y + .1*x*y + .2*np.sqrt(np.abs(x))
+    dn = 300 + x + 2*y + .1*x*x + .1*x*y + .1*np.sqrt(np.abs(x))
+    shared = (20*np.sin(6*x*np.pi) + 20*np.sin(2*x*np.pi))*2/3
+    dl += shared + (20*np.sin(y*np.pi)+40*np.sin(y/3*np.pi))*2/3
+    dl += (160*np.sin(y/12*np.pi)+320*np.sin(y*np.pi/30))*2/3
+    dn += shared + (20*np.sin(x*np.pi)+40*np.sin(x/3*np.pi))*2/3
+    dn += (150*np.sin(x/12*np.pi)+300*np.sin(x/30*np.pi))*2/3
+    rad = np.deg2rad(lat[inside])
+    magic = 1 - .00669342162296594323*np.sin(rad)**2
+    result_lat[inside] += dl*180 / ((6378245*(1-.00669342162296594323)/(magic*np.sqrt(magic)))*np.pi)
+    result_lon[inside] += dn*180 / ((6378245/np.sqrt(magic)*np.cos(rad))*np.pi)
+    return result_lon, result_lat
+
+
 def gcj_to_wgs(lon, lat):
     x, y = lon, lat
     for _ in range(12):
@@ -216,10 +237,53 @@ def make_grid(selection, resolution=1):
     return Grid(selection, poly, geographic, crs, from_origin(left, top, res, res), width, height, res, points)
 
 
-def tiles_for(grid, zoom):
+def _gcj_tiles_for(grid, zoom):
+    """Conservative dense perimeter in source coordinates, including datum edges.
+
+    GCJ is not a CRS that GDAL can reproject. Planning the target rectangle in
+    its shifted coordinates also covers interpolation at curved/rotated edges.
+    The two metre guard exceeds the chord error of 25 m perimeter segments.
+    """
+    left, top = grid.transform @ (0, 0)
+    right, bottom = grid.transform @ (grid.width, grid.height)
+    nx, ny = max(2, math.ceil((right-left)/25)+1), max(2, math.ceil((top-bottom)/25)+1)
+    xs, ys = np.linspace(left, right, nx), np.linspace(bottom, top, ny)
+    east = np.concatenate((xs, xs, np.full(ny, left), np.full(ny, right)))
+    north = np.concatenate((np.full(nx, bottom), np.full(nx, top), ys, ys))
+    inv = Transformer.from_crs(grid.crs, 4326, always_xy=True)
+    lon, lat = inv.transform(east, north)
+    west, south, east, north = lon.min(), lat.min(), lon.max(), lat.max()
+    # Boundaries of the local approximation are discontinuous. Include samples
+    # on both sides even when the boundary lies inside the target rectangle.
+    x = np.linspace(west, east, max(nx, ny))
+    y = np.linspace(south, north, max(nx, ny))
+    longitude, latitude = [lon], [lat]
+    for boundary in (72.004, 137.8347):
+        if west <= boundary <= east:
+            for offset in (-1e-9, 1e-9):
+                longitude.append(np.full(y.shape, boundary+offset)); latitude.append(y)
+    for boundary in (.8293, 55.8271):
+        if south <= boundary <= north:
+            for offset in (-1e-9, 1e-9):
+                longitude.append(x); latitude.append(np.full(x.shape, boundary+offset))
+    lon, lat = wgs_to_gcj_array(np.concatenate(longitude), np.concatenate(latitude))
+    world = 40075016.68557849
+    sx, sy = lon*world/360, np.arcsinh(np.tan(np.deg2rad(lat)))*world/(2*np.pi)
+    guard = max(2., 2*world/(256*2**zoom))
+    west, south = mercantile.lnglat(float(sx.min()-guard), float(sy.min()-guard))
+    east, north = mercantile.lnglat(float(sx.max()+guard), float(sy.max()+guard))
+    a, b = mercantile.tile(west, north, zoom), mercantile.tile(east, south, zoom)
+    if (abs(a.x-b.x)+1)*(abs(a.y-b.y)+1) > 100000:
+        raise ValueError("瓦片候选超过 10 万张，请降低层级或缩小区域")
+    return list(mercantile.tiles(west, south, east, north, zooms=zoom))
+
+
+def tiles_for(grid, zoom, datum="WGS84"):
     z = int(zoom)
     if not 0 <= z <= 24:
         raise ValueError("影像层级应为 0–24")
+    if datum == "GCJ02":
+        return _gcj_tiles_for(grid, z)
     lat = grid.geographic.centroid.y
     margin = max(grid.resolution*2, 2*40075016.686*math.cos(math.radians(lat))/(256*2**z))
     fwd = Transformer.from_crs(4326, grid.crs, always_xy=True)

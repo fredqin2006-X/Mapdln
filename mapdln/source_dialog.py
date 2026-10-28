@@ -13,8 +13,9 @@ from PySide6.QtWidgets import (QDialog,QWidget,QVBoxLayout,QHBoxLayout,QGridLayo
 
 from .config import save,redact,Ledger
 from .sources import (list_sources,get_source,credentials_for,validate_source,split_credentials,
-    parse_wmts,secret_values)
+    parse_wmts,secret_values,BUILTIN_IDS,EDITABLE_BUILTINS,provider_note)
 from .engine import session_for,fetch_tile,Control
+from .geometry import from_wgs
 
 
 class Probe(QObject):
@@ -51,7 +52,8 @@ class SourcesDialog(QDialog):
         self.name=QLineEdit();self.protocol=QComboBox();self.protocol.addItem('XYZ · 常用瓦片地址','xyz');self.protocol.addItem('TMS · 反向行号','tms');self.protocol.addItem('WMTS · 读取服务图层','wmts')
         self.url=QPlainTextEdit();self.url.setObjectName('sourceEditor');self.url.setFixedHeight(66);self.url.setPlaceholderText('https://example.com/{z}/{x}/{y}.png?key={token}')
         self.token=QLineEdit();self.token.setEchoMode(QLineEdit.EchoMode.Password);self.token.setPlaceholderText('无需认证的图源可留空')
-        for row,(label,field) in enumerate((('图源名称',self.name),('服务类型',self.protocol),('服务地址',self.url),('Key / Token',self.token))):basic.addWidget(QLabel(label),row,0,Qt.AlignmentFlag.AlignTop);basic.addWidget(field,row,1)
+        self.token_label=QLabel('Key / Token');self.mk_label=QLabel('图层 MK');self.mk=QLineEdit();self.mk.setEchoMode(QLineEdit.EchoMode.Password);self.mk.setPlaceholderText('从吉林一号图源管理复制图层 MK')
+        for row,(label,field) in enumerate(((QLabel('图源名称'),self.name),(QLabel('服务类型'),self.protocol),(QLabel('服务地址'),self.url),(self.token_label,self.token),(self.mk_label,self.mk))):basic.addWidget(label,row,0,Qt.AlignmentFlag.AlignTop);basic.addWidget(field,row,1)
         self.wmts_panel=QWidget();wl=QVBoxLayout(self.wmts_panel);wl.setContentsMargins(0,0,0,0);wl.setSpacing(6)
         self.read_button=QPushButton('读取 WMTS 图层 · 1 次元数据请求');self.read_button.clicked.connect(self.read_wmts);wl.addWidget(self.read_button)
         self.layers=QComboBox();self.layers.setMinimumContentsLength(20);wl.addWidget(self.layers);self.layers.currentIndexChanged.connect(self.select_wmts);self.form.addWidget(self.wmts_panel)
@@ -59,8 +61,8 @@ class SourcesDialog(QDialog):
         self.advanced=QWidget();ag=QGridLayout(self.advanced);ag.setContentsMargins(0,0,0,0);ag.setHorizontalSpacing(12);ag.setVerticalSpacing(8);ag.setColumnStretch(0,1);ag.setColumnStretch(1,1)
         self.minimum=QSpinBox();self.minimum.setRange(0,24);self.maximum=QSpinBox();self.maximum.setRange(0,24);self.maximum.setValue(18)
         self.size=QComboBox();self.size.addItem('256 × 256',256);self.size.addItem('512 × 512',512)
-        self.format=QComboBox();self.format.addItems(['auto','JPEG','PNG'])
-        self.datum=QComboBox();self.datum.addItem('WGS84 · Web Mercator','WGS84');self.datum.addItem('CGCS2000 · Web Mercator','CGCS2000')
+        self.format=QComboBox();self.format.addItems(['auto','JPEG','PNG','WEBP'])
+        self.datum=QComboBox();self.datum.addItem('WGS84 · Web Mercator','WGS84');self.datum.addItem('CGCS2000 · Web Mercator','CGCS2000');self.datum.addItem('GCJ-02 · 导出时校正','GCJ02')
         self.subdomains=QLineEdit();self.subdomains.setPlaceholderText('如 a,b,c；对应 {s}')
         self.cache=QSpinBox();self.cache.setRange(1,31536000);self.cache.setValue(43200);self.cache.setSuffix(' 秒')
         self.attribution=QLineEdit();self.attribution.setPlaceholderText('数据供应商与署名')
@@ -73,7 +75,7 @@ class SourcesDialog(QDialog):
         self.headers=QPlainTextEdit();self.headers.setObjectName('sourceEditor');self.headers.setFixedHeight(64);self.headers.setPlaceholderText('可选请求头，JSON 对象；所有值均加密保存')
         ag.addWidget(QLabel('请求头（敏感内容）'),5,0,1,2);ag.addWidget(self.headers,6,0,1,2)
         self.form.addWidget(self.advanced);self.advanced.hide();self.advanced_toggle.toggled.connect(self.advanced.setVisible)
-        note=QLabel('首版支持标准 Web Mercator 栅格。GCJ-02 / BD-09 影像不可直接当作 WGS84 导出；吉林一号与腾讯的专用接入待验证。');note.setWordWrap(True);note.setProperty('muted',True);self.form.addWidget(note);self.form.addStretch(1)
+        self.note=QLabel();self.note.setWordWrap(True);self.note.setProperty('muted',True);self.form.addWidget(self.note);self.form.addStretch(1)
         self.status=QLabel('');self.status.setWordWrap(True);self.status.setMinimumHeight(38);outer.addWidget(self.status)
         actions=QHBoxLayout();self.import_button=QPushButton('导入配置');self.export_button=QPushButton('导出配置');self.delete_button=QPushButton('删除');self.test_button=QPushButton('测试 · 1 张瓦片');self.save_button=QPushButton('保存并应用');self.save_button.setProperty('primary',True)
         for b in (self.import_button,self.export_button,self.delete_button):actions.addWidget(b)
@@ -84,7 +86,7 @@ class SourcesDialog(QDialog):
         self.load_source()
 
     def protocol_changed(self):
-        self.wmts_panel.setVisible(self.protocol.currentData()=='wmts' and self.current_id not in ('mapbox','tianditu'))
+        self.wmts_panel.setVisible(self.protocol.currentData()=='wmts' and (self.current_id not in BUILTIN_IDS or self.current_id in EDITABLE_BUILTINS))
 
     def new_source(self):
         self.selector.blockSignals(True);self.selector.setCurrentIndex(-1);self.selector.blockSignals(False)
@@ -95,14 +97,20 @@ class SourcesDialog(QDialog):
     def load_source(self):
         self.current_id=self.selector.currentData();source=get_source(self.settings,self.current_id)
         self.current_credentials=credentials_for(self.settings,self.current_id);self.wmts_spec=source if source['protocol']=='wmts' else None
-        self.load_fields(source);self.status.setText('天地图影像不叠加文字注记。请使用具备地图服务权限的 Key。' if self.current_id=='tianditu' else '')
+        self.wmts_specs=[];self.layers.blockSignals(True);self.layers.clear();self.layers.blockSignals(False)
+        self.load_fields(source);self.status.setText('')
 
     def load_fields(self,spec):
         self.loading=True
-        builtin=self.current_id in ('mapbox','tianditu')
-        self.name.setText(spec.get('name',''));self.protocol.setCurrentIndex(max(0,self.protocol.findData(spec.get('protocol','xyz'))));self.url.setPlainText(spec.get('url_template',''))
+        builtin=self.current_id in BUILTIN_IDS;editable=not builtin or self.current_id in EDITABLE_BUILTINS
+        name=get_source(self.settings,self.current_id)['name'] if builtin else spec.get('name','')
+        self.name.setText(name);self.protocol.setCurrentIndex(max(0,self.protocol.findData(spec.get('protocol','xyz'))));self.url.setPlainText(spec.get('url_template',''))
         self.token.setText(self.current_credentials.get('token',''));self.minimum.setValue(spec.get('min_zoom',0));self.maximum.setValue(spec.get('max_zoom',18));self.size.setCurrentIndex(max(0,self.size.findData(spec.get('tile_size',256))));self.format.setCurrentText(spec.get('format','auto'));self.datum.setCurrentIndex(max(0,self.datum.findData(spec.get('datum','WGS84'))));self.subdomains.setText(','.join(spec.get('subdomains',[])));self.cache.setValue(spec.get('cache_seconds',43200));self.attribution.setText(spec.get('attribution',''));self.rate.setValue(spec.get('requests_per_second',4));self.concurrency.setValue(spec.get('max_concurrency',4));self.headers.setPlainText(json.dumps(self.current_credentials.get('headers',{}),ensure_ascii=False) if self.current_credentials.get('headers') else '')
-        for field in (self.name,self.protocol,self.url,self.advanced):field.setEnabled(not builtin)
+        jilin=self.current_id=='jilin';self.mk.setText(self.current_credentials.get('credential_1',''));self.mk.setVisible(jilin);self.mk_label.setVisible(jilin)
+        self.token_label.setText('访问 TK' if jilin else 'Key / Token');self.token.setPlaceholderText('从吉林一号图源管理复制访问 TK' if jilin else '无需认证的图源可留空')
+        self.note.setText(provider_note(self.current_id))
+        self.name.setEnabled(not builtin)
+        for field in (self.protocol,self.url,self.advanced):field.setEnabled(editable)
         self.delete_button.setEnabled(not builtin and self.current_id is not None);self.protocol_changed()
         self.loading=False
 
@@ -111,15 +119,20 @@ class SourcesDialog(QDialog):
             self.wmts_spec=None;self.wmts_specs=[];self.layers.clear()
 
     def collect(self):
-        if self.current_id in ('mapbox','tianditu'):
+        if self.current_id in BUILTIN_IDS and self.current_id not in EDITABLE_BUILTINS:
             return get_source(self.settings,self.current_id),{'token':self.token.text().strip()}
         headers=json.loads(self.headers.toPlainText() or '{}')
         if not isinstance(headers,dict):raise ValueError('请求头必须是 JSON 对象')
         url,extracted=split_credentials(self.url.toPlainText().strip(),headers)
         credentials=copy.deepcopy(self.current_credentials);credentials.update(extracted);credentials['headers']={**headers,**extracted.get('headers',{})}
         if 'token' not in extracted:credentials['token']=self.token.text().strip()
+        if self.current_id=='jilin' and 'credential_1' not in extracted:credentials['credential_1']=self.mk.text().strip()
+        protocol=self.protocol.currentData()
+        if protocol!='wmts' and any(marker in url for marker in ('{-y}','{reverseY}')):
+            url=url.replace('{-y}','{y}').replace('{reverseY}','{y}');protocol='tms'
         spec=copy.deepcopy(self.wmts_spec or {}) if self.protocol.currentData()=='wmts' else {}
-        spec.update(id=self.current_id or self.draft_id,name=self.name.text().strip(),protocol=self.protocol.currentData(),url_template=url,min_zoom=self.minimum.value(),max_zoom=self.maximum.value(),tile_size=self.size.currentData(),format=self.format.currentText(),crs='EPSG:3857',datum=self.datum.currentData(),subdomains=self.subdomains.text().strip(),cache_seconds=self.cache.value(),attribution=self.attribution.text().strip(),requests_per_second=self.rate.value(),max_concurrency=self.concurrency.value())
+        name=get_source(self.settings,self.current_id)['name'] if self.current_id in BUILTIN_IDS else self.name.text().strip()
+        spec.update(id=self.current_id or self.draft_id,name=name,protocol=protocol,url_template=url,min_zoom=self.minimum.value(),max_zoom=self.maximum.value(),tile_size=self.size.currentData(),format=self.format.currentText(),crs='EPSG:3857',datum=self.datum.currentData(),subdomains=self.subdomains.text().strip(),cache_seconds=self.cache.value(),attribution=self.attribution.text().strip(),requests_per_second=self.rate.value(),max_concurrency=self.concurrency.value())
         if spec['protocol']=='wmts' and not self.wmts_spec:raise ValueError('请先读取 WMTS 图层并选择一个兼容图层')
         return validate_source(spec),credentials
 
@@ -134,16 +147,19 @@ class SourcesDialog(QDialog):
         self.busy=False
         self.content_page.setEnabled(True)
         for w in (self.selector,self.new_button,self.save_button,self.test_button,self.read_button,self.import_button):w.setEnabled(True)
-        self.delete_button.setEnabled(self.current_id not in (None,'mapbox','tianditu'))
-        if error:self.status.setText(redact(str(error),secret_values(self.current_credentials)+[self.token.text().strip()]));return
+        self.delete_button.setEnabled(self.current_id is not None and self.current_id not in BUILTIN_IDS)
+        if error:self.status.setText(redact(str(error),secret_values(self.current_credentials)+[self.token.text().strip(),self.mk.text().strip()]));return
         if self.probe_callback:self.probe_callback(result)
 
     def read_wmts(self):
         raw=self.url.toPlainText().strip()
         if not raw:self.status.setText('请填写 WMTS 服务地址');return
         try:
-            safe,extracted=split_credentials(raw,json.loads(self.headers.toPlainText() or '{}'));credentials={**self.current_credentials,**extracted}
+            headers=json.loads(self.headers.toPlainText() or '{}')
+            if not isinstance(headers,dict):raise ValueError('请求头必须是 JSON 对象')
+            safe,extracted=split_credentials(raw,headers);credentials={**self.current_credentials,**extracted};credentials['headers']={**headers,**extracted.get('headers',{})}
             if 'token' not in extracted:credentials['token']=self.token.text().strip()
+            if self.current_id=='jilin' and 'credential_1' not in extracted:credentials['credential_1']=self.mk.text().strip()
             target=safe
             from urllib.parse import quote
             for name,value in credentials.items():
@@ -174,7 +190,9 @@ class SourcesDialog(QDialog):
     def select_wmts(self):
         index=self.layers.currentIndex()
         if 0<=index<len(self.wmts_specs):
-            self.wmts_spec=self.wmts_specs[index];self.load_fields(self.wmts_spec)
+            self.wmts_spec=copy.deepcopy(self.wmts_specs[index])
+            if self.current_id in BUILTIN_IDS:self.wmts_spec.update(id=self.current_id,name=get_source(self.settings,self.current_id)['name'])
+            self.load_fields(self.wmts_spec)
 
     def test_source(self):
         try:
@@ -183,23 +201,27 @@ class SourcesDialog(QDialog):
             def work():
                 import mercantile
                 z=min(max(12,source['min_zoom']),source['max_zoom'])
-                return fetch_tile(mercantile.tile(*self.test_center,z),credential,options,Control(lambda *a,**k:None),Ledger(),'verify',True,source=source)
+                center=from_wgs(self.test_center,source['datum'])
+                return fetch_tile(mercantile.tile(*center,z),credential,options,Control(lambda *a,**k:None),Ledger(),'verify',True,source=source)
             self.start_probe(work,lambda result:self.status.setText('瓦片验证成功；位置与覆盖范围请在工作台预览确认。'))
-        except Exception as exc:self.status.setText(redact(exc,secret_values(self.current_credentials)+[self.token.text().strip()]))
+        except Exception as exc:self.status.setText(redact(exc,secret_values(self.current_credentials)+[self.token.text().strip(),self.mk.text().strip()]))
 
     def save_source(self):
         try:
             source,credential=self.collect();candidate=copy.deepcopy(self.settings)
             if source['id']=='mapbox':candidate['mapbox_token']=credential.get('token','')
             elif source['id']=='tianditu':candidate['tianditu_key']=credential.get('token','')
+            elif source['id'] in EDITABLE_BUILTINS:
+                candidate.setdefault('provider_sources',{})[source['id']]=source
+                candidate.setdefault('source_credentials',{})[source['id']]=credential
             else:
                 candidate['custom_sources']=[s for s in candidate.get('custom_sources',[]) if s['id']!=source['id']]+[source]
                 candidate.setdefault('source_credentials',{})[source['id']]=credential
             save({k:v for k,v in candidate.items() if k!='proxy'});self.settings=candidate;self.saved_id=source['id'];self.accept()
-        except Exception as exc:self.status.setText(redact(exc,secret_values(self.current_credentials)+[self.token.text().strip()]))
+        except Exception as exc:self.status.setText(redact(exc,secret_values(self.current_credentials)+[self.token.text().strip(),self.mk.text().strip()]))
 
     def delete_source(self):
-        if self.current_id in (None,'mapbox','tianditu'):return
+        if self.current_id is None or self.current_id in BUILTIN_IDS:return
         try:
             candidate=copy.deepcopy(self.settings);candidate['custom_sources']=[s for s in candidate.get('custom_sources',[]) if s['id']!=self.current_id];candidate.setdefault('source_credentials',{}).pop(self.current_id,None)
             save({k:v for k,v in candidate.items() if k!='proxy'});self.settings=candidate;self.accept()
@@ -208,7 +230,7 @@ class SourcesDialog(QDialog):
     def export_source(self):
         try:
             source,_=self.collect();path,_=QFileDialog.getSaveFileName(self,'导出不含凭据的图源配置',source['name']+'.json','图源配置 (*.json)')
-            if path:Path(path).write_text(json.dumps(source,ensure_ascii=False,indent=2),encoding='utf-8');self.status.setText('已导出图源配置；不包含 Key、Token 和请求头。')
+            if path:Path(path).write_text(json.dumps(source,ensure_ascii=False,indent=2),encoding='utf-8');self.status.setText('已导出图源配置；不包含 Key、Token、MK 和请求头。')
         except Exception as exc:self.status.setText(redact(exc,secret_values(self.current_credentials)))
 
     def import_source(self):
@@ -216,7 +238,10 @@ class SourcesDialog(QDialog):
         if not path:return
         try:
             if Path(path).stat().st_size>65536:raise ValueError('图源配置超过 64 KiB')
-            spec=json.loads(Path(path).read_text(encoding='utf-8'));url,credentials=split_credentials(spec.get('url_template',''),spec.pop('headers',{}));spec['url_template']=url;spec.pop('token',None);spec['id']='custom-'+uuid.uuid4().hex[:12];spec=validate_source(spec)
+            spec=json.loads(Path(path).read_text(encoding='utf-8'));url,credentials=split_credentials(spec.get('url_template',''),spec.pop('headers',{}))
+            if spec.get('protocol','xyz')!='wmts' and any(marker in url for marker in ('{-y}','{reverseY}')):
+                url=url.replace('{-y}','{y}').replace('{reverseY}','{y}');spec['protocol']='tms'
+            spec['url_template']=url;spec.pop('token',None);spec['id']='custom-'+uuid.uuid4().hex[:12];spec=validate_source(spec)
             self.selector.blockSignals(True);self.selector.setCurrentIndex(-1);self.selector.blockSignals(False)
             self.current_id=None;self.draft_id=spec['id'];self.current_credentials=credentials;self.wmts_spec=spec if spec['protocol']=='wmts' else None;self.load_fields(spec);self.status.setText('配置已读取；检查参数并填写自己的凭据后保存。')
         except Exception as exc:self.status.setText('导入失败：'+redact(exc))

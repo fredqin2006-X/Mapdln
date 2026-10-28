@@ -46,7 +46,7 @@ def test_builtins_are_independent_and_require_only_their_credentials():
     assert default_source()["name"] != "mutated"
     settings = {"mapbox_token": "pk.mock", "tianditu_key": "test-tdt"}
     sources = list_sources(settings)
-    assert [s["id"] for s in sources] == ["mapbox", "tianditu"]
+    assert [s["id"] for s in sources] == ["mapbox", "tianditu", "tencent", "jilin"]
     tdt = get_source(settings, "tianditu")
     url, headers = build_request(tdt, SimpleNamespace(z=3, x=2, y=4), credentials_for(settings, "tianditu"))
     assert urlsplit(url).hostname.startswith("t")
@@ -72,7 +72,7 @@ def test_xyz_tms_and_subdomains_keep_geographic_xyz_input():
 
 
 @pytest.mark.parametrize("changes", [
-    {"crs": "EPSG:4326"}, {"datum": "GCJ-02"}, {"datum": "BD09"},
+    {"crs": "EPSG:4326"}, {"datum": "BD09"},
     {"tile_size": 300}, {"min_zoom": 20, "max_zoom": 19}, {"protocol": "javascript"},
     {"url_template": "file:///tmp/{z}/{x}/{y}"},
     {"url_template": "https://user:pass@example.test/{z}/{x}/{y}"},

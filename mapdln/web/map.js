@@ -124,6 +124,7 @@ window.previewProvider=async function(p){
   }else{
    const sourceId=p.startsWith('source:')?p.slice(7):'mapbox';
    const source=(config.sources||[]).find(s=>s.id===sourceId);if(!source)throw new Error('图源已删除，请重新选择导出影像');
+   system=source.datum==='GCJ02'?'GCJ02':'WGS84';
    if(sourceId==='mapbox'&&!config.mapbox_available)throw new Error('请到账户配置页保存 Mapbox 公共 Token');
    map=leafletMap();
    const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

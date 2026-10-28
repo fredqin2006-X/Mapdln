@@ -67,7 +67,7 @@ class PreviewServer:
                         c=owner.settings()
                         data={"amap_key":c.get("amap_key",""),"baidu_ak":c.get("baidu_ak",""),"mapbox_available":bool(c.get("mapbox_token")),
                               "amap_service":owner.origin+"/_AMapService/"+owner.cap}
-                        data['sources']=[{k:s[k] for k in ('id','name','min_zoom','max_zoom','tile_size','attribution')} for s in list_sources(c)]
+                        data['sources']=[{k:s[k] for k in ('id','name','min_zoom','max_zoom','tile_size','attribution','datum')} for s in list_sources(c)]
                         return self.response(200,json.dumps(data).encode())
                     if path=="mapbox-status":
                         return self.response(200,json.dumps({"error":owner.last_mapbox_error}).encode())
@@ -103,7 +103,7 @@ class PreviewServer:
                             with gate:p=fetch_tile(mercantile.Tile(x,y,z),credential,options,control,Ledger(),'preview',source=source)
                             owner.source_errors[source_id]=''
                             from PIL import Image
-                            with Image.open(p) as img:mime='image/png' if img.format=='PNG' else 'image/jpeg'
+                            with Image.open(p) as img:mime={'PNG':'image/png','WEBP':'image/webp'}.get(img.format,'image/jpeg')
                             return self.response(200,p.read_bytes(),mime)
                         except Exception as exc:
                             from .config import redact

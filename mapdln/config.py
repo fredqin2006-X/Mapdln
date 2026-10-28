@@ -64,13 +64,19 @@ def load():
 def save(data):
     # Defensively split credentials from imported source definitions as well as
     # the GUI's normal workflow. No URL key or custom request header is plaintext.
-    from .sources import split_credentials, validate_source
+    from .sources import split_credentials, validate_source, EDITABLE_BUILTINS, list_sources
     import copy
     data = copy.deepcopy(data)
     source_credentials = data.get("source_credentials", {})
     if not isinstance(source_credentials, dict):
         raise ValueError("图源凭据库格式无效")
-    for source in data.get("custom_sources", []):
+    providers = data.get("provider_sources", {})
+    if not isinstance(providers, dict) or any(key not in EDITABLE_BUILTINS for key in providers):
+        raise ValueError("内置图源配置无效")
+    for provider_id, source in providers.items():
+        if not isinstance(source, dict) or source.get('id') != provider_id:
+            raise ValueError("内置图源 ID 不匹配")
+    for source in list(data.get("custom_sources", [])) + list(providers.values()):
         url, extracted = split_credentials(source.get("url_template", ""), source.pop("headers", None))
         source["url_template"] = url
         if source.get("token"):
@@ -80,6 +86,7 @@ def save(data):
         normalized = validate_source(source)
         source.clear()
         source.update(normalized)
+    list_sources(data)
     if source_credentials:
         data["source_credentials"] = source_credentials
     disk = {k: v for k, v in data.items() if k not in SECRETS}
@@ -100,7 +107,7 @@ def redact(text, secrets=()):
             for spelling in {value, quote(value, safe=""), quote_plus(value)}:
                 text = text.replace(spelling, "[已遮蔽]")
     text = re.sub(r"(?:pk|sk)\.[A-Za-z0-9_.-]+", "[已遮蔽Token]", text)
-    keys = r"(?:access_token|token|tk|jscode|securityJsCode|key|ak|api[_-]?key|secret|password|signature|sig|x-amz-(?:credential|signature|security-token))"
+    keys = r"(?:access_token|token|tk|mk|jscode|securityJsCode|key|ak|api[_-]?key|secret|password|signature|sig|x-amz-(?:credential|signature|security-token))"
     text = re.sub(r"(?i)(\b" + keys + r"=)[^&\s\"']+", r"\1[已遮蔽]", text)
     text = re.sub(r'''(?i)(["'](?:authorization|proxy-authorization|cookie|set-cookie|''' + keys + r''')["']\s*:\s*["'])[^"']*''', r"\1[已遮蔽]", text)
     return re.sub(r"(?i)(\b(?:Authorization|Proxy-Authorization)\s*:\s*)[^\r\n]+", r"\1[已遮蔽]", text)

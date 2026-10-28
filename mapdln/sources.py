@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import xml.etree.ElementTree as ET
 
 
-_SECRET_NAMES = {"token", "access_token", "tk", "key", "ak", "api_key", "apikey", "api-key", "secret", "signature", "sig", "authorization", "password"}
+_SECRET_NAMES = {"token", "access_token", "tk", "mk", "key", "ak", "api_key", "apikey", "api-key", "secret", "signature", "sig", "authorization", "password"}
 _PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)\}")
 _WORLD = 40075016.68557849
 _ORIGIN = _WORLD / 2
@@ -30,6 +30,33 @@ _TIANDITU = {
     "matrix_ids": {str(i): str(i) for i in range(1, 19)},
     "wmts_layer": "img", "wmts_matrix_set": "w",
 }
+_TENCENT = {
+    "id": "tencent", "name": "腾讯 · 卫星影像（兼容）", "protocol": "tms",
+    "url_template": "https://p{s}.map.gtimg.com/sateTiles/{z}/{x16}/{y16}/{x}_{y}.jpg",
+    "tile_size": 256, "format": "auto", "min_zoom": 0, "max_zoom": 18,
+    "crs": "EPSG:3857", "datum": "GCJ02", "attribution": "© 腾讯地图",
+    "cache_seconds": 43200, "subdomains": ["0", "1", "2", "3"], "matrix_ids": {},
+    "requests_per_second": 2, "max_concurrency": 2,
+}
+_JILIN = {
+    "id": "jilin", "name": "吉林一号 · 卫星影像", "protocol": "xyz",
+    "url_template": "https://api.jl1mall.com/getMap/{z}/{x}/{y}?tk={token}&mk={credential_1}&sch=wmts",
+    "tile_size": 256, "format": "auto", "min_zoom": 0, "max_zoom": 18,
+    "crs": "EPSG:3857", "datum": "WGS84", "attribution": "© 吉林一号 / 长光卫星",
+    "cache_seconds": 43200, "subdomains": [], "matrix_ids": {},
+    "requests_per_second": 2, "max_concurrency": 2,
+}
+BUILTIN_IDS = ("mapbox", "tianditu", "tencent", "jilin")
+EDITABLE_BUILTINS = ("tencent", "jilin")
+
+
+def provider_note(source_id):
+    return {
+        "mapbox": "使用自己的 Mapbox 公共 Access Token（pk.）。",
+        "tianditu": "天地图影像不叠加文字注记。请使用具备地图服务权限的 Key。",
+        "tencent": "腾讯卫星兼容适配，非官方批量下载 API。请使用有相应权限的服务地址；GCJ-02 近似校正不能用于测量级定位。",
+        "jilin": "填写自己的访问 TK 和图层 MK。预设使用左上原点（sch=wmts）；企业地址可保留 pro 参数，服务层级与坐标以获配图层为准。",
+    }.get(source_id, "支持标准 Web Mercator 的 XYZ、TMS 和 WMTS；GCJ-02 影像按输出网格近似校正，BD-09 影像暂不支持。")
 
 
 def default_source():
@@ -37,8 +64,15 @@ def default_source():
 
 
 def list_sources(settings):
-    result = [default_source(), copy.deepcopy(_TIANDITU)]
-    seen = {"mapbox", "tianditu"}
+    overrides = settings.get("provider_sources", {})
+    if not isinstance(overrides, dict) or any(key not in EDITABLE_BUILTINS for key in overrides):
+        raise ValueError("内置图源配置无效")
+    result = []
+    for base in (_MAPBOX, _TIANDITU, _TENCENT, _JILIN):
+        source = {**copy.deepcopy(base), **copy.deepcopy(overrides.get(base['id'], {}))}
+        source.update(id=base['id'], name=base['name'])
+        result.append(validate_source(source))
+    seen = set(BUILTIN_IDS)
     for item in settings.get("custom_sources", []):
         spec = validate_source(item)
         if spec["id"] in seen:
@@ -79,10 +113,17 @@ def split_credentials(url, headers=None):
         netloc = netloc.rsplit("@", 1)[-1]
     pairs = []
     values = {}
+    reserved = set(_PLACEHOLDER.findall(str(url)))
     for key, value in parse_qsl(parts.query, keep_blank_values=True):
         if key.lower() in _SECRET_NAMES and value and not _PLACEHOLDER.fullmatch(value):
             if value not in values:
-                name = "token" if not values else "credential_" + str(len(values))
+                preferred = "credential_1" if key.lower() == "mk" else "token"
+                name = preferred
+                index = 1
+                while name in reserved or name in credentials:
+                    name = "credential_" + str(index)
+                    index += 1
+                reserved.add(name)
                 values[value] = name
                 credentials[name] = value
             value = "{" + values[value] + "}"
@@ -124,16 +165,16 @@ def validate_source(spec):
         raise ValueError("首版仅支持 EPSG:3857 标准 Web Mercator 图源")
     result["crs"] = "EPSG:3857"
     datum = str(result.get("datum", "WGS84")).upper().replace("-", "")
-    if datum not in ("WGS84", "CGCS2000"):
-        raise ValueError("该图源坐标基准尚不支持导出；GCJ-02 / BD-09 不能当作 WGS84 影像")
+    if datum not in ("WGS84", "CGCS2000", "GCJ02"):
+        raise ValueError("该图源坐标基准尚不支持导出；请选择 WGS84、CGCS2000 或 GCJ-02")
     result["datum"] = datum
     result["tile_size"] = _number(result.get("tile_size", 256), "瓦片尺寸", 256, 512)
     if result["tile_size"] not in (256, 512):
         raise ValueError("瓦片尺寸应为 256 或 512")
     fmt = str(result.get("format", "auto"))
     fmt = "auto" if fmt.lower() == "auto" else fmt.upper().replace("JPG", "JPEG")
-    if fmt not in ("JPEG", "PNG", "auto"):
-        raise ValueError("仅支持 JPEG / PNG 栅格瓦片")
+    if fmt not in ("JPEG", "PNG", "WEBP", "auto"):
+        raise ValueError("仅支持 JPEG / PNG / WebP 栅格瓦片")
     result["format"] = fmt
     result["min_zoom"] = _number(result.get("min_zoom", 0), "最小层级", 0, 24)
     result["max_zoom"] = _number(result.get("max_zoom", 18), "最大层级", result["min_zoom"], 24)
@@ -151,7 +192,7 @@ def validate_source(spec):
     if len(template) > 8192 or any(ord(char) < 32 for char in template):
         raise ValueError("图源地址无效")
     placeholders = set(_PLACEHOLDER.findall(template))
-    if any(name not in {"z", "x", "y", "s", "token"} and not re.fullmatch(r"credential_\d+", name) for name in placeholders):
+    if any(name not in {"z", "x", "y", "x16", "y16", "s", "token"} and not re.fullmatch(r"credential_\d+", name) for name in placeholders):
         raise ValueError("图源模板包含不支持的占位符")
     remainder = _PLACEHOLDER.sub("", template)
     if "{" in remainder or "}" in remainder or not {"z", "x", "y"}.issubset(placeholders):
@@ -202,7 +243,7 @@ def build_request(spec, tile, credentials):
         raise ValueError("瓦片超出图源层级或范围")
     if spec["protocol"] == "tms":
         y = 2**z - 1 - y
-    values = {"z": spec["matrix_ids"].get(str(z), str(z)), "x": str(x), "y": str(y)}
+    values = {"z": spec["matrix_ids"].get(str(z), str(z)), "x": str(x), "y": str(y), "x16": str(x//16), "y16": str(y//16)}
     if spec["subdomains"]:
         values["s"] = spec["subdomains"][(x+y) % len(spec["subdomains"])]
     for name in _PLACEHOLDER.findall(spec["url_template"]):
@@ -210,6 +251,8 @@ def build_request(spec, tile, credentials):
             continue
         value = credentials.get(name, "")
         if not isinstance(value, str) or not value:
+            if spec['id'] == 'jilin':
+                raise ValueError("吉林一号缺少凭据，请在图源管理中填写图层 MK 与访问 TK")
             raise ValueError(f"{spec['name']} 缺少凭据，请在图源管理中配置")
         values[name] = value
     if spec["id"] == "mapbox" and not credentials.get("token", "").startswith("pk."):
@@ -333,7 +376,7 @@ def parse_wmts(xml, service_url):
         layer_id = _text(layer, "Identifier")
         title = _text(layer, "Title", layer_id)
         formats = [_text_node.text.strip() for _text_node in _children(layer, "Format") if _text_node.text]
-        fmt = next((value for value in formats if value.lower() == "image/png"), None) or next((value for value in formats if value.lower() in ("image/jpeg", "image/jpg", "tiles")), None)
+        fmt = next((value for value in formats if value.lower() == "image/png"), None) or next((value for value in formats if value.lower() in ("image/jpeg", "image/jpg", "image/webp", "tiles")), None)
         if not fmt:
             continue
         styles = _children(layer, "Style")
@@ -371,7 +414,7 @@ def parse_wmts(xml, service_url):
             template = urlunsplit((endpoint.scheme, endpoint.netloc, endpoint.path, urlencode(query, safe="{}"), ""))
             identifier = "wmts-" + hashlib.sha256((template + layer_id + matrix_id).encode()).hexdigest()[:16]
             result.append(validate_source({"id": identifier, "name": title + " · " + matrix_id, "protocol": "wmts", "url_template": template,
-                "tile_size": tile_size, "format": "PNG" if fmt.lower() == "image/png" else "auto" if fmt.lower() == "tiles" else "JPEG", "min_zoom": lo, "max_zoom": hi,
+                "tile_size": tile_size, "format": {"image/png":"PNG", "image/webp":"WEBP", "tiles":"auto"}.get(fmt.lower(), "JPEG"), "min_zoom": lo, "max_zoom": hi,
                 "crs": "EPSG:3857", "datum": "WGS84", "matrix_ids": levels, "wmts_layer": layer_id, "wmts_matrix_set": matrix_id}))
     if not result:
         raise ValueError("未找到受支持的 WMTS 图层；首版仅支持无范围限制、连续层级的全球 EPSG:3857 标准瓦片网格")

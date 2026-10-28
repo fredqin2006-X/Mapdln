@@ -1,5 +1,6 @@
 """Bounded downloads, validated cache and block-wise geographic exports."""
 import concurrent.futures
+from contextlib import nullcontext
 import hashlib
 import io
 import json
@@ -20,9 +21,10 @@ from rasterio.transform import from_bounds
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window, transform as window_transform
 import mercantile
+from pyproj import Transformer
 from shapely.geometry import mapping
 from .config import home, Ledger, atomic_json, redact
-from .geometry import make_grid, tiles_for, boundary_json
+from .geometry import make_grid, tiles_for, boundary_json, wgs_to_gcj_array
 from . import sources as source_registry
 from . import __version__
 
@@ -114,7 +116,7 @@ def valid_tile(path, age=CACHE_SECONDS, source=None):
         if age and time.time()-path.stat().st_mtime > age:
             return False
         with Image.open(path) as im:
-            formats = ("JPEG", "PNG") if spec["format"] == "auto" else (spec["format"],)
+            formats = ("JPEG", "PNG", "WEBP") if spec["format"] == "auto" else (spec["format"],)
             if im.format not in formats or im.size != (spec["tile_size"], spec["tile_size"]):
                 return False
             im.verify()
@@ -144,7 +146,7 @@ def estimate(selection, resolution, zoom, reserve=10, source=None, imagery=True,
     grid = make_grid(selection, resolution)
     spec = source_registry.validate_source(source or source_registry.default_source())
     z = plan_zoom(selection, resolution, zoom, spec) if imagery else None
-    tiles = tiles_for(grid, z) if imagery else []
+    tiles = tiles_for(grid, z, spec["datum"]) if imagery else []
     cached = sum(valid_tile(tile_path(t, spec, credentials), spec["cache_seconds"], spec) for t in tiles)
     new = len(tiles)-cached
     return {**grid.info(), "tiles": len(tiles), "cache": cached, "new_requests": new,
@@ -190,7 +192,7 @@ def fetch_tile(tile, token, options, control, ledger, kind="download", force=Fal
                     raise ValueError(f"{spec['name']} 返回重定向，请在图源管理中使用最终服务地址")
                 response.raise_for_status()
                 with Image.open(io.BytesIO(response.content)) as img:
-                    formats = ("JPEG", "PNG") if spec["format"] == "auto" else (spec["format"],)
+                    formats = ("JPEG", "PNG", "WEBP") if spec["format"] == "auto" else (spec["format"],)
                     if img.size != (spec["tile_size"],spec["tile_size"]) or img.format not in formats:
                         raise ValueError(f"{spec['name']} 瓦片格式或尺寸异常，请检查图源配置")
                     img.verify()
@@ -251,17 +253,72 @@ def export_mask(grid, temp, out, control):
     rio_copy(maskpath,out/"mask.png",driver="PNG")
 
 
+def _source_pixels(src, rows, cols, control, cache):
+    """Gather arbitrary pixels using bounded 256 px blocks, even when downsampling."""
+    result = np.zeros((4, rows.size), dtype="uint8")
+    valid = (rows >= 0) & (rows < src.height) & (cols >= 0) & (cols < src.width)
+    indices = np.flatnonzero(valid)
+    if not indices.size:
+        return result
+    across = math.ceil(src.width/256)
+    blocks = (rows[indices]//256)*across + cols[indices]//256
+    order = np.argsort(blocks, kind="stable")
+    indices, blocks = indices[order], blocks[order]
+    starts = np.r_[0, np.flatnonzero(np.diff(blocks))+1, blocks.size]
+    for start, end in zip(starts[:-1], starts[1:]):
+        control.checkpoint()
+        key = int(blocks[start])
+        row, col = divmod(key, across)
+        data = cache.pop(key, None)
+        if data is None:
+            data = src.read(window=Window(col*256, row*256, min(256,src.width-col*256), min(256,src.height-row*256)))
+        cache[key] = data
+        if len(cache) > 16:
+            cache.pop(next(iter(cache)))
+        target = indices[start:end]
+        result[:,target] = data[:,rows[target]-row*256,cols[target]-col*256]
+    return result
+
+
+def _gcj_window(src, grid, win, to_wgs84, control, cache):
+    """Inverse map UTM pixel centres to GCJ source pixels; alpha-aware bilinear."""
+    rows, cols = np.mgrid[int(win.row_off):int(win.row_off+win.height),
+                         int(win.col_off):int(win.col_off+win.width)]
+    east, north = grid.transform @ (cols+.5, rows+.5)
+    lon, lat = to_wgs84.transform(east, north)
+    lon, lat = wgs_to_gcj_array(lon, lat)
+    world = 40075016.68557849
+    x, y = lon*world/360, np.arcsinh(np.tan(np.deg2rad(lat)))*world/(2*np.pi)
+    col, row = (~src.transform) @ (x, y)
+    col, row = col.ravel()-.5, row.ravel()-.5
+    left, top = np.floor(col).astype("int64"), np.floor(row).astype("int64")
+    dx, dy = col-left, row-top
+    rgb = np.zeros((3, row.size), dtype="float64")
+    alpha = np.zeros(row.size, dtype="float64")
+    for ox, oy, weight in ((0,0,(1-dx)*(1-dy)), (1,0,dx*(1-dy)),
+                           (0,1,(1-dx)*dy), (1,1,dx*dy)):
+        control.checkpoint()
+        pixels = _source_pixels(src, top+oy, left+ox, control, cache)
+        coverage = pixels[3].astype("float64")*weight
+        rgb += pixels[:3]*coverage
+        alpha += coverage
+    np.divide(rgb, alpha, out=rgb, where=alpha>0)
+    rgba = np.vstack((rgb, alpha))
+    return np.rint(np.clip(rgba,0,255)).astype("uint8").reshape(4,int(win.height),int(win.width))
+
+
 def satellite_export(grid, tiles, temp, out, control, source=None, credentials=None):
     """Sparse tiled source on disk; read target blocks through GDAL's WarpedVRT."""
     spec = source_registry.validate_source(source or source_registry.default_source())
     size = spec["tile_size"]
+    gcj = spec["datum"] == "GCJ02"
     z = tiles[0].z
     xmin,xmax = min(t.x for t in tiles),max(t.x for t in tiles)
     ymin,ymax = min(t.y for t in tiles),max(t.y for t in tiles)
     lo,hi = mercantile.xy_bounds(xmin,ymax,z),mercantile.xy_bounds(xmax,ymin,z)
     source_path = temp/"satellite-source.tif"
     with rasterio.open(source_path,"w",driver="GTiff",width=(xmax-xmin+1)*size,height=(ymax-ymin+1)*size,
-                       count=4,dtype="uint8",crs="EPSG:3857",transform=from_bounds(lo.left,lo.bottom,hi.right,hi.top,(xmax-xmin+1)*size,(ymax-ymin+1)*size),
+                       count=4,dtype="uint8",crs=None if gcj else "EPSG:3857",transform=from_bounds(lo.left,lo.bottom,hi.right,hi.top,(xmax-xmin+1)*size,(ymax-ymin+1)*size),
                        tiled=True,blockxsize=256,blockysize=256,compress="deflate",SPARSE_OK="TRUE",BIGTIFF="IF_SAFER") as dst:
         dst.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
         for index,t in enumerate(tiles):
@@ -271,19 +328,21 @@ def satellite_export(grid, tiles, temp, out, control, source=None, credentials=N
             control.emit("progress",stage="影像网格准备",completed=index+1,total=len(tiles))
     aligned = temp/"satellite-rgba.tif"
     maskpath = temp/"shape-mask.tif"
-    with rasterio.open(source_path) as src, WarpedVRT(src,crs=grid.crs,transform=grid.transform,width=grid.width,height=grid.height,resampling=Resampling.bilinear,warp_mem_limit=64) as vrt, \
+    to_wgs84 = Transformer.from_crs(grid.crs, 4326, always_xy=True) if gcj else None
+    cache = {}
+    with rasterio.open(source_path) as src, (nullcontext(None) if gcj else WarpedVRT(src,crs=grid.crs,transform=grid.transform,width=grid.width,height=grid.height,resampling=Resampling.bilinear,warp_mem_limit=64)) as vrt, \
          rasterio.open(aligned,"w",**profile(grid,4,"uint8")) as dst, rasterio.open(maskpath,"w",**profile(grid,1,"uint8")) as maskdst:
         dst.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
         total = math.ceil(grid.width/512)*math.ceil(grid.height/512)
         for index,win in enumerate(windows(grid.width,grid.height)):
             control.checkpoint()
             mask = mask_for(grid,win)
-            rgba = vrt.read(window=win)
+            rgba = _gcj_window(src,grid,win,to_wgs84,control,cache) if gcj else vrt.read(window=win)
             rgba[3] = np.minimum(rgba[3],mask)
             rgba[:3,rgba[3]==0] = 0
             dst.write(rgba,window=win)
             maskdst.write(mask,1,window=win)
-            control.emit("progress",stage="影像重采样与形状裁切",completed=index+1,total=total)
+            control.emit("progress",stage="GCJ-02 影像校正与形状裁切" if gcj else "影像重采样与形状裁切",completed=index+1,total=total)
     control.checkpoint()
     rio_copy(aligned,out/"satellite.png",driver="PNG")
     rio_copy(maskpath,out/"mask.png",driver="PNG")
@@ -568,7 +627,7 @@ def _run_task(task,token,emit,control=None):
     credentials=credentials_dict(token) if imagery else {}
     secrets=source_registry.secret_values(credentials)
     z=plan_zoom(task["selection"],task.get("resolution",1),task.get("zoom",17),source) if imagery else None
-    tiles=tiles_for(grid,z) if imagery else []
+    tiles=tiles_for(grid,z,source["datum"]) if imagery else []
     options=dict(task.get("options",{}))
     taskid=task.get("task_id") or str(int(time.time()))
     options["task_id"]=taskid
@@ -700,6 +759,7 @@ def _run_task(task,token,emit,control=None):
                 "curve_interpolation":"closed centripetal Catmull–Rom; adaptive chord sampling res/4" if grid.selection["shape"]=="curve" else None,
                 "height_encoding":encoding,"task":safe_task,"local_mapbox_requests":control.requests if imagery and source['id']=='mapbox' else 0,
                 "local_source_requests":control.requests,"imagery_source":source_registry.public_metadata(source) if imagery else None,"local_dem":dem_meta,
+                "imagery_georeferencing":("GCJ02 source pixels inverse-sampled onto the WGS84-derived output grid; local approximate conversion, not survey accuracy" if source["datum"]=="GCJ02" else "Standard Web Mercator reprojected onto the output grid") if imagery else None,
                 "native_resolution_note":"Output pixel size does not increase source detail or establish position accuracy",
                 "attribution":"; ".join(filter(None,[source.get("attribution","") if imagery else "", "FABDEM V1-2 CC BY-NC-SA 4.0" if mode=="real" else ("User-supplied local DEM" if mode=="local" else "")]))})
     # Remove only our own intermediates after success; never touch user's files/cache.
