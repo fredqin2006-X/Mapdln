@@ -85,7 +85,9 @@ class SourcesPanel(QWidget):
         self.token_label=QLabel('Key / Token');self.mk_label=QLabel('图层 MK');self.mk=QLineEdit();self.mk.setEchoMode(QLineEdit.EchoMode.Password);self.mk.setPlaceholderText('从吉林一号图源管理复制图层 MK')
         tokenrow=QWidget();tr=QHBoxLayout(tokenrow);tr.setContentsMargins(0,0,0,0);tr.setSpacing(8);tr.addWidget(self.token,1)
         self.show_secret=QCheckBox('显示');self.show_secret.toggled.connect(self.reveal);tr.addWidget(self.show_secret)
-        for row,(label,field) in enumerate(((QLabel('图源名称'),self.name),(QLabel('服务类型'),self.protocol),(QLabel('服务地址'),self.url),(self.token_label,tokenrow),(self.mk_label,self.mk))):basic.addWidget(label,row,0,Qt.AlignmentFlag.AlignTop);basic.addWidget(field,row,1)
+        url_label=QLabel('服务地址');url_label.setContentsMargins(0,7,0,0)  # 与多行框首行文字对齐
+        for row,(label,field) in enumerate(((QLabel('图源名称'),self.name),(QLabel('服务类型'),self.protocol),(url_label,self.url),(self.token_label,tokenrow),(self.mk_label,self.mk))):
+            basic.addWidget(label,row,0,Qt.AlignmentFlag.AlignLeft|(Qt.AlignmentFlag.AlignTop if field is self.url else Qt.AlignmentFlag.AlignVCenter));basic.addWidget(field,row,1)
         self.wmts_panel=QWidget();wl=QVBoxLayout(self.wmts_panel);wl.setContentsMargins(0,0,0,0);wl.setSpacing(6)
         self.read_button=QPushButton('读取 WMTS 图层 · 1 次元数据请求');self.read_button.clicked.connect(self.read_wmts);wl.addWidget(self.read_button)
         self.layers=FlatCombo();self.layers.setMinimumContentsLength(20);wl.addWidget(self.layers);self.layers.currentIndexChanged.connect(self.select_wmts);self.form.addWidget(self.wmts_panel)

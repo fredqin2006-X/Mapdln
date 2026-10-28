@@ -8,7 +8,7 @@
 
 [下载 Windows 2.4.0](https://github.com/fredqin2006-X/Mapdln/releases/tag/v2.4.0) · [开源仓库](https://github.com/fredqin2006-X/Mapdln) · [发行说明](RELEASE-NOTES.md)
 
-当前源码版本为 **2.7.0**，本次为本地构建，尚未发布 GitHub Release。已有公开版本仍为 [2.4.0](https://github.com/fredqin2006-X/Mapdln/releases/tag/v2.4.0)。程序及交付包不携带开发者账户配置，使用在线服务时请填写自己的凭据。
+当前源码版本为 **2.7.1**，本次为本地构建，尚未发布 GitHub Release。已有公开版本仍为 [2.4.0](https://github.com/fredqin2006-X/Mapdln/releases/tag/v2.4.0)。程序及交付包不携带开发者账户配置，使用在线服务时请填写自己的凭据。
 
 ## 使用
 

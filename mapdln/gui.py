@@ -222,6 +222,8 @@ QLabel#health[state="warn"] { background: $warn_tint; color: $warn; }
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit#sourceEditor {
     background: $field; border: 1px solid $line; border-radius: 8px; padding: 6px 10px; min-height: 20px;
     selection-background-color: $accent; selection-color: $on_accent; }
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { max-height: 20px; }
+QPlainTextEdit#sourceEditor { min-height: 48px; }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover { border-color: $strong; }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit#sourceEditor:focus { border-color: $accent; background: $surface; }
 QLineEdit:read-only { color: $muted; }
