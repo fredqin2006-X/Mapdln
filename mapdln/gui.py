@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from PySide6.QtCore import QObject,Signal,Slot,QUrl,QProcess,QTimer,Qt,QStandardPaths
 from PySide6.QtGui import QDesktopServices,QFont,QIcon,QPixmap,QPalette,QColor
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QLabel,
-    QPushButton,QLineEdit,QComboBox,QDoubleSpinBox,QSpinBox,QStackedWidget,QScrollArea,
+    QPushButton,QLineEdit,QDoubleSpinBox,QSpinBox,QStackedWidget,QScrollArea,
     QPlainTextEdit,QProgressBar,QFileDialog,QSplitter,QCheckBox,QAbstractSpinBox,
-    QGridLayout,QSizePolicy,QStyledItemDelegate,QFrame)
+    QGridLayout,QSizePolicy,QFrame)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage,QWebEngineProfile,QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -23,6 +23,7 @@ from .engine import estimate,Control,fetch_tile,FABDEM_BASE,session_for
 from .server import PreviewServer
 from .sources import get_source,list_sources,credentials_for,secret_values,build_request
 from .local_dem import inspect_dem,snapshot_dem
+from .widgets import FlatCombo
 
 
 class Jobs(QObject):
@@ -119,25 +120,6 @@ def divider():
     line=QFrame();line.setObjectName("divider");line.setFixedHeight(1);return line
 def resource(name):
     return Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent.parent))/"mapdln"/name
-
-
-class FlatCombo(QComboBox):
-    def __init__(self):
-        super().__init__()
-        self.setItemDelegate(QStyledItemDelegate(self))
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
-        self.view().setSpacing(3)
-        popup=self.view().window();popup.setObjectName('comboPopup')
-        if isinstance(popup,QFrame):popup.setFrameShape(QFrame.Shape.NoFrame)
-        popup.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint,True)
-    def wheelEvent(self,event):
-        if self.hasFocus():super().wheelEvent(event)
-        else:event.ignore()
-    def showPopup(self):
-        width=max(self.width(),max((self.fontMetrics().horizontalAdvance(self.itemText(i)) for i in range(self.count())),default=0)+48)
-        self.view().setMinimumWidth(width)
-        super().showPopup()
 
 
 class FlatNumber(QDoubleSpinBox):

@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl,urlencode,urlsplit,urlunsplit
 
 from PySide6.QtCore import QObject,Signal,Qt
 from PySide6.QtWidgets import (QDialog,QWidget,QVBoxLayout,QHBoxLayout,QGridLayout,QLabel,
-    QComboBox,QLineEdit,QPlainTextEdit,QSpinBox,QDoubleSpinBox,QPushButton,QScrollArea,
+    QLineEdit,QPlainTextEdit,QSpinBox,QDoubleSpinBox,QPushButton,QScrollArea,
     QCheckBox,QFileDialog,QFrame,QAbstractSpinBox)
 
 from .config import save,redact,Ledger
@@ -16,6 +16,7 @@ from .sources import (list_sources,get_source,credentials_for,validate_source,sp
     parse_wmts,secret_values,BUILTIN_IDS,EDITABLE_BUILTINS,provider_note)
 from .engine import session_for,fetch_tile,Control
 from .geometry import from_wgs
+from .widgets import FlatCombo
 
 
 class Probe(QObject):
@@ -42,27 +43,27 @@ class SourcesDialog(QDialog):
         outer=QVBoxLayout(self);outer.setContentsMargins(20,18,20,18);outer.setSpacing(12)
         title=QLabel('图源管理');title.setProperty('role','pageTitle');outer.addWidget(title)
         caption=QLabel('选择内置影像，或添加自己的瓦片服务。凭据加密保存在本机。');caption.setWordWrap(True);caption.setProperty('muted',True);outer.addWidget(caption)
-        top=QHBoxLayout();self.selector=QComboBox();self.selector.setPlaceholderText('新建自定义图源')
+        top=QHBoxLayout();self.selector=FlatCombo();self.selector.setPlaceholderText('新建自定义图源')
         for source in list_sources(self.settings):self.selector.addItem(source['name'],source['id'])
         self.selector.setCurrentIndex(0)
         top.addWidget(self.selector,1);self.new_button=QPushButton('添加图源');self.new_button.clicked.connect(self.new_source);top.addWidget(self.new_button);outer.addLayout(top)
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame);scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);outer.addWidget(scroll,1)
         page=QWidget();self.content_page=page;self.form=QVBoxLayout(page);self.form.setContentsMargins(0,0,8,0);self.form.setSpacing(10);scroll.setWidget(page)
         basic=QGridLayout();basic.setColumnStretch(1,1);basic.setHorizontalSpacing(14);basic.setVerticalSpacing(8);self.form.addLayout(basic)
-        self.name=QLineEdit();self.protocol=QComboBox();self.protocol.addItem('XYZ · 常用瓦片地址','xyz');self.protocol.addItem('TMS · 反向行号','tms');self.protocol.addItem('WMTS · 读取服务图层','wmts')
+        self.name=QLineEdit();self.protocol=FlatCombo();self.protocol.addItem('XYZ · 常用瓦片地址','xyz');self.protocol.addItem('TMS · 反向行号','tms');self.protocol.addItem('WMTS · 读取服务图层','wmts')
         self.url=QPlainTextEdit();self.url.setObjectName('sourceEditor');self.url.setFixedHeight(66);self.url.setPlaceholderText('https://example.com/{z}/{x}/{y}.png?key={token}')
         self.token=QLineEdit();self.token.setEchoMode(QLineEdit.EchoMode.Password);self.token.setPlaceholderText('无需认证的图源可留空')
         self.token_label=QLabel('Key / Token');self.mk_label=QLabel('图层 MK');self.mk=QLineEdit();self.mk.setEchoMode(QLineEdit.EchoMode.Password);self.mk.setPlaceholderText('从吉林一号图源管理复制图层 MK')
         for row,(label,field) in enumerate(((QLabel('图源名称'),self.name),(QLabel('服务类型'),self.protocol),(QLabel('服务地址'),self.url),(self.token_label,self.token),(self.mk_label,self.mk))):basic.addWidget(label,row,0,Qt.AlignmentFlag.AlignTop);basic.addWidget(field,row,1)
         self.wmts_panel=QWidget();wl=QVBoxLayout(self.wmts_panel);wl.setContentsMargins(0,0,0,0);wl.setSpacing(6)
         self.read_button=QPushButton('读取 WMTS 图层 · 1 次元数据请求');self.read_button.clicked.connect(self.read_wmts);wl.addWidget(self.read_button)
-        self.layers=QComboBox();self.layers.setMinimumContentsLength(20);wl.addWidget(self.layers);self.layers.currentIndexChanged.connect(self.select_wmts);self.form.addWidget(self.wmts_panel)
+        self.layers=FlatCombo();self.layers.setMinimumContentsLength(20);wl.addWidget(self.layers);self.layers.currentIndexChanged.connect(self.select_wmts);self.form.addWidget(self.wmts_panel)
         self.advanced_toggle=QCheckBox('高级设置 · 层级、坐标与请求头');self.form.addWidget(self.advanced_toggle)
         self.advanced=QWidget();ag=QGridLayout(self.advanced);ag.setContentsMargins(0,0,0,0);ag.setHorizontalSpacing(12);ag.setVerticalSpacing(8);ag.setColumnStretch(0,1);ag.setColumnStretch(1,1)
         self.minimum=QSpinBox();self.minimum.setRange(0,24);self.maximum=QSpinBox();self.maximum.setRange(0,24);self.maximum.setValue(18)
-        self.size=QComboBox();self.size.addItem('256 × 256',256);self.size.addItem('512 × 512',512)
-        self.format=QComboBox();self.format.addItems(['auto','JPEG','PNG','WEBP'])
-        self.datum=QComboBox();self.datum.addItem('WGS84 · Web Mercator','WGS84');self.datum.addItem('CGCS2000 · Web Mercator','CGCS2000');self.datum.addItem('GCJ-02 · 导出时校正','GCJ02')
+        self.size=FlatCombo();self.size.addItem('256 × 256',256);self.size.addItem('512 × 512',512)
+        self.format=FlatCombo();self.format.addItems(['auto','JPEG','PNG','WEBP'])
+        self.datum=FlatCombo();self.datum.addItem('WGS84 · Web Mercator','WGS84');self.datum.addItem('CGCS2000 · Web Mercator','CGCS2000');self.datum.addItem('GCJ-02 · 导出时校正','GCJ02')
         self.subdomains=QLineEdit();self.subdomains.setPlaceholderText('如 a,b,c；对应 {s}')
         self.cache=QSpinBox();self.cache.setRange(1,31536000);self.cache.setValue(43200);self.cache.setSuffix(' 秒')
         self.attribution=QLineEdit();self.attribution.setPlaceholderText('数据供应商与署名')
