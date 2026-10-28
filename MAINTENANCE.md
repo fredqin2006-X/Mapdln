@@ -1,6 +1,6 @@
 # Mapdln 维护文档
 
-适用版本：2.4.0 Windows 发布版；更新日期：2026-10-25。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
+适用版本：2.5.0 Windows 本地构建；更新日期：2026-10-28。当前公开发行仍为 2.4.0。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
 
 ## 1. 源码入口与职责
 
@@ -10,21 +10,32 @@
 | `mapdln/__init__.py` | GUI 显示版本；版本调整以这里为入口，并同步 README、变更记录及交付包名 |
 | `mapdln/gui.py` | PySide6 工作台、账户页、WebChannel 桥接、选区状态、额度估算、后台进程及锁定生命周期 |
 | `mapdln/web/map.html` | 地图容器、SVG 选区/预览/控制点、工具栏、灰色锁定样式 |
-| `mapdln/web/map.js` | 三种预览底图适配、绘图、旋转、预览、键盘、右键、滚轮和中键交互 |
+| `mapdln/web/map.js` | 官方 SDK / 通用栅格 / 离线预览、DEM 覆盖、绘图、旋转和键鼠交互 |
 | `mapdln/geometry.py` | 坐标转换、旋转矩形、闭合向心 Catmull–Rom 曲线、UTM 网格与实际下载轮廓 |
 | `mapdln/engine.py` | 瓦片估算、缓存、请求预算、卫星和地形下载、统一网格导出 |
+| `mapdln/sources.py` | 内置/自定义图源、模板与凭据分离、WMTS 矩阵验证、请求构造和来源元数据 |
+| `mapdln/source_dialog.py` | 图源管理、后台能力文档读取、单瓦片测试、凭据保存与配置导入导出 |
+| `mapdln/local_dem.py` | 本地 GeoTIFF 探测、文件快照、单位转换和逐像素有效覆盖预检 |
 | `mapdln/worker.py` | 后台命令接收、暂停/继续/取消和结构化事件回传 |
-| `mapdln/server.py` | 仅监听本机的预览服务、静态资源、Mapbox 瓦片和高德安全转发 |
+| `mapdln/server.py` | 仅监听本机的预览服务、已注册图源瓦片、共享限速/并发及高德安全转发 |
 | `mapdln/config.py` | 用户目录、Windows DPAPI 配置加密、日志遮蔽和请求记录 |
 | `tools/build.ps1`、`tools/mapdln.spec` | 唯一构建流程及打包规则，生成图标、运行测试、构建及验证 EXE、备份并更新根目录入口 |
 | `Mapdln.spec` | 兼容旧打包命令，仅转发到 `tools/mapdln.spec`，不维护第二套过滤规则 |
 | `tools/verify_build.ps1`、`tools/verify_build.py` | 核查包内版本、体积与资源，并在隔离配置/系统 PATH/中文目录下验证冻结后台导出 |
 | `tests/test_engine.py` | 几何、坐标、实际成果、缓存、预算和下载引擎回归 |
 | `tests/test_map_interactions.py` | 原生 Qt 输入进入实际 WebEngine 页面，验证交互与后台锁定 |
+| `tests/test_sources.py`、`tests/test_sources_gui.py` | 图源协议、配置加密、矩阵验证、GUI 向导及预览服务 |
+| `tests/test_local_dem.py`、`tests/test_source_pipeline.py`、`tests/test_source_review.py` | 本地 DEM、CLI/worker、真实 localhost HTTP 导出与独立地理公式/失败恢复验证 |
 
 界面布局：顶栏（品牌 · 分段导航 · 凭据状态徽标）；工作台左侧为可滚动参数卡片（任务、地图与输出、额度预判、可折叠高级设置），右侧为地图卡片（标题状态栏 + 地图 + 选区信息）及其下方的任务进度栏（进度、暂停/继续/取消、开始下载）。浅色/深色配色集中在 `gui.py` 的 `THEMES` 与 `STYLE`，地图页配色在 `map.html` 的 CSS 变量中，两处强调色需保持一致。调整布局时保留现有控件属性名（测试和逻辑直接引用），锁定选区的灰色填充 `#80889055` 受回归测试约束。
 
-GUI 和 CLI 共用同一几何及下载引擎。地图底图用于预览，实际卫星下载仍使用 Mapbox；改变预览来源不得改变任务的下载来源或已选区域。
+GUI 和 CLI 共用同一几何及下载引擎。“导出影像”决定成果来源，“预览底图”可跟随影像或单独选择定位底图；改变预览不得改变任务来源或已选区域。工作台把影像清晰度默认设为自动，手动层级位于高级设置；本地 DEM 控件按需展开。仅高程自动使用离线坐标预览，切回影像时恢复之前的底图选择。
+
+图源扩展统一修改 `sources.py`，不要在 GUI、预览和引擎分别拼接地址。首版只接受标准 EPSG:3857 全球矩阵，256/512 像素 JPEG/PNG，层级 0–24（供应商自己的范围继续限制，例如 Mapbox 最大 22）。WMTS 必须校验比例、原点、尺寸与范围，并保留服务的矩阵 ID；不能仅凭 CRS 字符串认作 XYZ。
+
+任务使用 `source`、`imagery`、`elevation` 与可选 `dem` 快照；凭据通过 worker stdin 的 `token` 字段传递，可为结构化字典。自定义 URL 的常见凭据参数与所有请求头使用独立 DPAPI 凭据库；导出元数据通过允许字段生成，不写 URL、Token、请求头或完整 DEM 路径。不同来源/凭据的缓存指纹不同；只有标准 Mapbox 继续复用旧缓存。
+
+本地 DEM 使用 `snapshot_dem → validate_dem → elevation_export`；源 mask 和有限数值决定有效像元，合法 0 / -9999 不作为缺失。单位换算为 `(raw × scale + offset) × unit_factor`，目标 NoData 为 NaN。预检和导出共用 `aligned_dem_data`，不要重复实现；主文件和伴随文件变化、缺失单位、覆盖空洞及输入输出同文件均应拒绝。真实地形/平坦模式保留原 NoData 行为。
 
 ## 2. 地图编辑规则
 
@@ -51,7 +62,7 @@ GUI 和 CLI 共用同一几何及下载引擎。地图底图用于预览，实�
 
 - 高德显示坐标为 GCJ-02，百度为 BD-09，Mapbox/手动输入为 WGS84。不要直接将国内底图坐标作为 WGS84 使用。
 - 矩形 `angle_deg` 为 UTM 投影平面内的逆时针角度，默认 0。支持“中心 + 米制宽高”及“旋转后的两个对角点”；调整角点时必须保留角度。
-- 旋转矩形按实际轮廓裁切，但输出网格仍向北对齐。卫星 Alpha、掩膜、DEM 和高度图必须保持相同尺寸和像素变换。
+- 旋转矩形按实际轮廓裁切，但输出网格仍向北对齐。影像、掩膜、DEM 和高度图必须保持相同尺寸和像素变换；PNG Alpha 还保留源透明度，不能总是假定它等于几何 mask。
 - 前端曲线预览在屏幕像素中自适应采样；最终轮廓由 Python 在米制坐标中按分辨率采样。预览不替代下载几何验证，不应触发额度估算或下载请求。
 - 清除时同时清空 Python 的 `selection/grid/plan`，取消待执行估算、更新面积说明，并回传空的 `updateSelection()`，防止连续拖动后的旧响应让已删除图形重新出现。
 
@@ -68,7 +79,7 @@ GUI 和 CLI 共用同一几何及下载引擎。地图底图用于预览，实�
 | 后台无法启动 | `worker_error()` 恢复编辑并关闭无效任务操作 |
 | 切换或重载底图 | `Bridge.pageReady()` 恢复现有锁定状态；不能仅靠前端默认值 |
 
-不要在收到“取消”点击或 `done` 消息时提前解锁；以后台进程结束作为正常解锁边界。更改参数和旧估算回调不能替换下载中的选区；`plan_generation` 用于忽略已经失效的估算结果。失败后“改用 0 米继续导出”使用原任务的选区快照。
+不要在收到“取消”点击或 `done` 消息时提前解锁；以后台进程结束作为正常解锁边界。更改参数和旧估算回调不能替换下载中的选区；`plan_generation` 用于忽略已经失效的估算结果。失败后“改用 0 米继续导出”使用原任务的选区、来源和凭据快照。未完成目录的 `.mapdln-task.json` 固定选区/网格/来源/导出模式，跨任务混用应提示换目录；完成后删除该清单。临时工作目录使用程序生成的 UUID，不能将外部 task_id 拼入待清理路径。
 
 ## 5. 开发、验证和构建
 
@@ -215,3 +226,15 @@ Copy-Item -LiteralPath test-output\build-backup\mapdln-97a94e466872.exe -Destina
 本轮本机复核记录保存在忽略目录 `test-output/release-2.4.0-build-verification.json` 与 `test-output/release-2.4.0-audit.json`。公开前检查待推送提交历史、暂存区、冻结应用代码/资源和 ZIP，排除本机真实账户值与私有文件。临时依赖分析脚本不进入本次提交；原文件留在工作区。
 
 发行顺序：显式提交源码和文档，更新本维护记录并提交，按第 6 节白名单打包并解压验证，扫描最终历史与 ZIP，再推送 main 及同一提交的 `v2.4.0` 标签；创建草稿 Release、上传唯一 ZIP，核对远端字节数和 SHA-256 后发布。最后复核 main/tag 一致、Latest 指向及匿名下载，并检查 GitHub 自动源码归档的文件清单。未完成上传或哈希不符时保持草稿，不将失败上传记作已发布。
+
+## 11. 2.5.0 本地构建与回退
+
+2026-10-28 完成实现并在本地 `main` 提交 `91cf93f`，随后更新本维护文档。内容为统一图源、天地图/自定义 XYZ/TMS/WMTS、本地 DEM、仅高程模式及配套 GUI/CLI。没有推送或创建 GitHub Release。
+
+正式构建完整回归 **145 项通过（58.35 秒）**。冻结检查在隔离配置、中文目录和仅系统 PATH 下完成标准 Mapbox 缓存导出、本地 DEM 英尺/比例/偏移处理、512px 半透明 PNG 自定义图源导出；实际请求数均为 0。根目录 EXE 实际打开后核查工作台、图源管理和添加表单。源码界面另检查了浅色/深色、1280×800 和 1200×780 布局。十个冻结应用模块及地图资源与源码一致。
+
+真实在线验证只调用了 **1 张 Mapbox 瓦片**，成功返回 256×256 JPEG。天地图未配置 Key，一次无 Key 能力文档请求返回 HTTP 418，未调用天地图瓦片；不能把协议/离线测试当成供应商授权验证。完整范围与限制见 `ACCEPTANCE.md`。
+
+根目录与 dist 的 EXE 均为 **184,351,373 字节（175.81 MiB）**，SHA-256 为 `c500e7f6ee2eed95d66bbf62f2dcc7afa2b27951f3eb487ca0ae95b84f3cd084`。旧 2.4.0 根目录程序已经备份到 `test-output/build-backup/mapdln-d2af40fd1363.exe`。日志和报告位于 `test-output/build-2.5.0.log`、`test-output/build-verification.json`、`test-output/artifact-audit-2.5.0.json`；界面截图位于 `test-output/source-ui-250/`。
+
+回退源码使用 `git revert 91cf93f` 并重新构建；临时恢复旧入口前先退出程序，再复制上述备份到根目录 `mapdln.exe`。回退为 2.4.0 后新增图源及本地 DEM 配置不再可用，应先保留用户配置副本；不要让旧版保存操作覆盖新配置。
