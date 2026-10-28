@@ -1,6 +1,6 @@
 # Mapdln 维护文档
 
-适用版本：2.6.0 Windows 本地构建；更新日期：2026-10-28。当前公开发行仍为 2.4.0。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
+适用版本：2.6.1 Windows 本地构建；更新日期：2026-10-28。当前公开发行仍为 2.4.0。以下命令在仓库根目录的 PowerShell 中执行。账户信息仅使用本机配置，本文件不保存真实凭据。
 
 ## 1. 源码入口与职责
 
@@ -9,6 +9,7 @@
 | `main.py` | 无参数启动桌面 GUI；`--cli` 命令行下载；`--worker` 独立后台任务入口和 UTF-8 通信初始化 |
 | `mapdln/__init__.py` | GUI 显示版本；版本调整以这里为入口，并同步 README、变更记录及交付包名 |
 | `mapdln/gui.py` | PySide6 工作台、账户页、WebChannel 桥接、选区状态、额度估算、后台进程及锁定生命周期 |
+| `mapdln/widgets.py` | 共享下拉控件、底边定位、长列表滚动、屏幕可用区域约束及失焦滚轮行为 |
 | `mapdln/web/map.html` | 地图容器、SVG 选区/预览/控制点、工具栏、灰色锁定样式 |
 | `mapdln/web/map.js` | 官方 SDK / 通用栅格 / 离线预览、DEM 覆盖、绘图、旋转和键鼠交互 |
 | `mapdln/geometry.py` | 坐标转换、旋转矩形、闭合向心 Catmull–Rom 曲线、UTM 网格与实际下载轮廓 |
@@ -250,3 +251,15 @@ Copy-Item -LiteralPath test-output\build-backup\mapdln-97a94e466872.exe -Destina
 根目录与 dist 的 EXE 均为 **184,363,456 字节（175.82 MiB）**，SHA-256 为 `fcada926545b6f3412a579c7e4bc9d6622a8c7653165a08a594fafd572b8c015`。2.5.0 程序备份在 `test-output/build-backup/mapdln-c500e7f6ee2e.exe`。报告位于 `test-output/build-2.6.0.log`、`test-output/build-verification.json`、`test-output/artifact-audit-2.6.0.json`、`test-output/tencent-live-export-260/result.json`；界面截图位于 `test-output/provider-ui-260/`。
 
 回退源码可对 `904b1e0` 执行 `git revert` 后重新构建；临时回退入口应先关闭程序，再复制上述 2.5.0 备份到根目录。回退前保留用户配置副本：2.5.0 不认识内置 `tencent` / `jilin` 及 GCJ02 栅格 / WebP，新版本的 `source_credentials` 不应被旧版保存操作丢弃。
+
+## 13. 2.6.1 下拉框位置与天地图验证
+
+2026-10-28 在本地 `main` 提交实现 `f55ba18`，随后更新本维护文档。工作台、账户页和图源管理统一使用 `widgets.FlatCombo`；下拉框从控件底边展开，临时禁用本次 Qt 原位置动画后恢复全局效果设置。长列表最多十项，按屏幕下方空间缩短高度并保留滚动，右侧边缘约束横向位置。控件底边已经超出屏幕可用区时保留 Qt 的可见性处理。没有推送、创建 Release 或生成完整发行 ZIP。
+
+正式构建完整回归 **178 项通过（70.11 秒）**，五种冻结后台导出通过。独立实际 Qt 的 9 组几何 / 交互检查及浅色、深色截图通过；成品实际启动到 2.6.1 离线工作台。用户用物理 Esc 停止 Computer Use 后未继续点击成品下拉框，成品点击验收不记为通过。11 个冻结应用模块及页面资源与源码一致，公开输入和冻结应用模块未发现真实凭据，私有文档未纳入程序。
+
+天地图的两条影像服务均有效：`img_w` 为 Web Mercator、`img_c` 为 CGCS2000 经纬度。用户本次提供的浏览器端 Key 在真实浏览器中可读取两种 z12 JPEG；普通 HTTP / HTTPS 客户端在 z3/z12/z18 均返回 403 / `301012`，程序内置下载也被拒绝，原因是 Key 权限类型。内置 `img_w` 配置不需改投影，但应使用允许普通客户端调用的 Key。通用导入器对 c 经纬度矩阵及该 w 能力文档的原点轴序仍会拒绝，本轮未放宽校验。不要把元数据成功或网页可访问记作桌面下载授权通过；不保存本轮凭据至公开文件。
+
+根目录 / dist 的 EXE 均为 **184,363,800 字节（175.82 MiB）**，SHA-256：`5ad1d98016c5cf8b9603db69e35bc929d347fa387d3cd389d2062e33aa060e3b`。2.6.0 入口备份为 `test-output/build-backup/mapdln-fcada926545b.exe`。构建日志：`test-output/build-2.6.1.log`；五种导出报告：`test-output/build-verification.json`；源码 / 成品核对、网络响应、样本及界面位置报告：`test-output/tianditu-check-20261028/`，网络结论见其中 `RESULT.md`。
+
+回退源码使用 `git revert f55ba18` 后重新构建；临时恢复 2.6.0 入口前先退出程序，再复制上述备份至根目录 `mapdln.exe`。本版未改账户配置结构。
